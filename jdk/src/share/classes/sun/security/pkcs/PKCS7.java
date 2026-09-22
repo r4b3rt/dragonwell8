@@ -182,6 +182,10 @@ public class PKCS7 {
         contentType = contentInfo.contentType;
         DerValue content = contentInfo.getContent();
 
+        if (content == null) {
+            throw new ParsingException("content is null");
+        }
+
         if (contentType.equals((Object)ContentInfo.SIGNED_DATA_OID)) {
             parseSignedData(content);
         } else if (contentType.equals((Object)ContentInfo.OLD_SIGNED_DATA_OID)) {
@@ -820,7 +824,7 @@ public class PKCS7 {
             unauthAttrs =
                 new PKCS9Attributes(new PKCS9Attribute[]{
                     new PKCS9Attribute(
-                        PKCS9Attribute.SIGNATURE_TIMESTAMP_TOKEN_STR,
+                        PKCS9Attribute.SIGNATURE_TIMESTAMP_TOKEN_OID,
                         tsToken)});
         }
 

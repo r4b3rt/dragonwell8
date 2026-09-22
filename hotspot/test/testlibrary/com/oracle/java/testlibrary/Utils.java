@@ -32,6 +32,10 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.UnknownHostException;
+import java.nio.file.Path;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.nio.file.attribute.FileAttribute;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Arrays;
@@ -164,6 +168,35 @@ public final class Utils {
         Collections.addAll(opts, getTestJavaOpts());
         Collections.addAll(opts, userArgs);
         return opts.toArray(new String[0]);
+    }
+
+    // This method is intended to be called from a jtreg test.
+    // It will identify the name of the test by means of stack walking.
+    // It can handle both jtreg tests and a testng tests wrapped inside jtreg tests.
+    // For jtreg tests the name of the test will be searched by stack-walking
+    // until the method main() is found; the class containing that method is the
+    // main test class and will be returned as the name of the test.
+    // Special handling is used for testng tests.
+    public static String getTestName() {
+        String result = null;
+
+        StackTraceElement[] elms = (new Throwable()).getStackTrace();
+        for (StackTraceElement n: elms) {
+            String className = n.getClassName();
+
+            // If this is a "main" method, then use its class name, but only
+            // if we are not using testng.
+            if ("main".equals(n.getMethodName())) {
+                result = className;
+                break;
+            }
+        }
+
+        if (result == null) {
+            throw new RuntimeException("Couldn't find main test class in stack trace");
+        }
+
+        return result;
     }
 
     /**
@@ -370,4 +403,25 @@ public final class Utils {
         }
         return new String(hexView);
     }
+
+    /**
+     * Creates an empty directory in "user.dir" or "."
+     * <p>
+     * This method is meant as a replacement for {@code Files#createTempDirectory(String, String, FileAttribute...)}
+     * that doesn't leave files behind in /tmp directory of the test machine
+     * <p>
+     * If the property "user.dir" is not set, "." will be used.
+     *
+     * @param prefix
+     * @param attrs
+     * @return the path to the newly created directory
+     * @throws IOException
+     *
+     * @see {@link Files#createTempDirectory(String, String, FileAttribute...)}
+     */
+    public static Path createTempDirectory(String prefix, FileAttribute<?>... attrs) throws IOException {
+        Path dir = Paths.get(System.getProperty("user.dir", "."));
+        return Files.createTempDirectory(dir, prefix);
+    }
+
 }

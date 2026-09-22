@@ -46,6 +46,8 @@
 #include "oops/instanceMirrorKlass.hpp"
 #include "oops/instanceOop.hpp"
 #include "oops/klass.inline.hpp"
+#include "oops/klass.inline.hpp"
+#include "oops/instanceKlass.inline.hpp"
 #include "oops/method.hpp"
 #include "oops/oop.inline.hpp"
 #include "oops/symbol.hpp"
@@ -293,6 +295,8 @@ InstanceKlass::InstanceKlass(int vtable_len,
   set_source_file_name_index(0);
   set_source_debug_extension(NULL, 0);
   set_array_name(NULL);
+  set_shared_locker(NULL);
+  set_shared_load_status(0);
   set_inner_classes(NULL);
   set_static_oop_field_count(0);
   set_nonstatic_field_size(0);
@@ -734,15 +738,7 @@ bool InstanceKlass::link_class_impl(
         // also sets rewritten
         this_oop->rewrite_class(CHECK_false);
       } else if (this_oop()->is_shared()) {
-        ResourceMark rm(THREAD);
-        char* message_buffer; // res-allocated by check_verification_dependencies
-        Handle loader = this_oop()->class_loader();
-        Handle pd     = this_oop()->protection_domain();
-        bool verified = SystemDictionaryShared::check_verification_dependencies(this_oop(),
-                        loader, pd, &message_buffer, THREAD);
-        if (!verified) {
-          THROW_MSG_(vmSymbols::java_lang_VerifyError(), message_buffer, false);
-        }
+        SystemDictionaryShared::check_verification_constraints(this_oop(), THREAD);
       }
 
       // relocate jsrs and link methods after they are all rewritten
@@ -1271,21 +1267,21 @@ void InstanceKlass::call_class_initializer_impl(instanceKlassHandle this_oop, TR
 
 void InstanceKlass::mask_for(methodHandle method, int bci,
   InterpreterOopMap* entry_for) {
-  // Dirty read, then double-check under a lock.
-  if (_oop_map_cache == NULL) {
-    // Otherwise, allocate a new one.
+  // Lazily create the _oop_map_cache at first request
+  // Lock-free access requires load_ptr_acquire.
+  OopMapCache* oop_map_cache =
+          static_cast<OopMapCache*>(OrderAccess::load_ptr_acquire(&_oop_map_cache));
+  if (oop_map_cache == NULL) {
     MutexLocker x(OopMapCacheAlloc_lock);
-    // First time use. Allocate a cache in C heap
-    if (_oop_map_cache == NULL) {
-      // Release stores from OopMapCache constructor before assignment
-      // to _oop_map_cache. C++ compilers on ppc do not emit the
-      // required memory barrier only because of the volatile
-      // qualifier of _oop_map_cache.
-      OrderAccess::release_store_ptr(&_oop_map_cache, new OopMapCache());
+    // Check if _oop_map_cache was allocated while we were waiting for this lock
+    if ((oop_map_cache = _oop_map_cache) == NULL) {
+      oop_map_cache = new OopMapCache();
+      // Ensure _oop_map_cache is stable, since it is examined without a lock
+      OrderAccess::release_store_ptr(&_oop_map_cache, oop_map_cache);
     }
   }
-  // _oop_map_cache is constant after init; lookup below does is own locking.
-  _oop_map_cache->lookup(method, bci, entry_for);
+  // _oop_map_cache is constant after init; lookup below does its own locking.
+  oop_map_cache->lookup(method, bci, entry_for);
 }
 
 
@@ -1807,7 +1803,7 @@ jmethodID InstanceKlass::get_jmethod_id(instanceKlassHandle ik_h, methodHandle m
         // we're single threaded or at a safepoint - no locking needed
         get_jmethod_id_length_value(jmeths, idnum, &length, &id);
       } else {
-        MutexLocker ml(JmethodIdCreation_lock);
+        MutexLockerEx ml(JmethodIdCreation_lock, Mutex::_no_safepoint_check_flag);
         get_jmethod_id_length_value(jmeths, idnum, &length, &id);
       }
     }
@@ -1857,7 +1853,7 @@ jmethodID InstanceKlass::get_jmethod_id(instanceKlassHandle ik_h, methodHandle m
       id = get_jmethod_id_fetch_or_update(ik_h, idnum, new_id, new_jmeths,
                                           &to_dealloc_id, &to_dealloc_jmeths);
     } else {
-      MutexLocker ml(JmethodIdCreation_lock);
+      MutexLockerEx ml(JmethodIdCreation_lock, Mutex::_no_safepoint_check_flag);
       id = get_jmethod_id_fetch_or_update(ik_h, idnum, new_id, new_jmeths,
                                           &to_dealloc_id, &to_dealloc_jmeths);
     }
@@ -2455,14 +2451,27 @@ void InstanceKlass::clean_method_data(BoolObjectClosure* is_alive) {
   }
 }
 
+void InstanceKlass::remove_java_mirror() {
+  Klass::remove_java_mirror();
 
-static void remove_unshareable_in_class(Klass* k) {
-  // remove klass's unshareable info
-  k->remove_unshareable_info();
+  // do array classes also.
+  if (array_klasses() != NULL) {
+    array_klasses()->remove_java_mirror();
+  }
 }
 
 void InstanceKlass::remove_unshareable_info() {
   Klass::remove_unshareable_info();
+
+  if (is_in_error_state()) {
+    // Classes are attempted to link during dumping and may fail,
+    // but these classes are still in the dictionary and class list in CLD.
+    // Check in_error state first because in_error is > linked state, so
+    // is_linked() is true.
+    // If there's a linking error, there is nothing else to remove.
+    return;
+  }
+
   // Unlink the class
   if (is_linked()) {
     unlink_class();
@@ -2476,14 +2485,27 @@ void InstanceKlass::remove_unshareable_info() {
     m->remove_unshareable_info();
   }
 
-  // do array classes also.
-  array_klasses_do(remove_unshareable_in_class);
-}
+  if (_array_klasses != NULL) {
+    ((ArrayKlass*)array_klasses())->remove_unshareable_info();
+  }
 
-static void restore_unshareable_in_class(Klass* k, TRAPS) {
-  // Array classes have null protection domain.
-  // --> see ArrayKlass::complete_create_array_klass()
-  k->restore_unshareable_info(ClassLoaderData::the_null_class_loader_data(), Handle(), CHECK);
+  // These are not allocated from metaspace, but they should should all be empty
+  // during dump time, so we don't need to worry about them in InstanceKlass::iterate().
+  guarantee(_source_debug_extension == NULL, "must be");
+  guarantee(_osr_nmethods_head == NULL, "must be");
+
+#if INCLUDE_JVMTI
+  guarantee(_breakpoints == NULL, "must be");
+  guarantee(_previous_versions == NULL, "must be");
+#endif
+
+  _init_thread = NULL;
+  _methods_jmethod_ids = NULL;
+  _jni_ids = NULL;
+  _oop_map_cache = NULL;
+  // FIXME -- backport relocate_cached_class_file() from metaspaceShared.cpp from JDK10
+  _cached_class_file = NULL; // don't support jvmti for now
+  _member_names = NULL;
 }
 
 void InstanceKlass::restore_unshareable_info(ClassLoaderData* loader_data, Handle protection_domain, TRAPS) {
@@ -2510,7 +2532,9 @@ void InstanceKlass::restore_unshareable_info(ClassLoaderData* loader_data, Handl
   // restore constant pool resolved references
   ik->constants()->restore_unshareable_info(CHECK);
 
-  ik->array_klasses_do(restore_unshareable_in_class, CHECK);
+  if (array_klasses() != NULL) {
+    ((ArrayKlass*)array_klasses())->restore_unshareable_info(ClassLoaderData::the_null_class_loader_data(), Handle(), CHECK);
+  }
 }
 
 // returns true IFF is_in_error_state() has been changed as a result of this call.
@@ -2623,7 +2647,7 @@ void InstanceKlass::release_C_heap_structures() {
   }
 
   // deallocate the cached class file
-  if (_cached_class_file != NULL) {
+  if (_cached_class_file != NULL && !MetaspaceShared::is_in_shared_space(_cached_class_file)) {
     os::free(_cached_class_file, mtClass);
     _cached_class_file = NULL;
   }
@@ -3940,3 +3964,18 @@ void InstanceKlass::set_init_thread(Thread *thread)  {
   }
   _init_thread = thread;
 }
+
+#if INCLUDE_CDS
+JvmtiCachedClassFileData* InstanceKlass::get_archived_class_data() {
+  if (DumpSharedSpaces) {
+    return _cached_class_file;
+  } else {
+    assert(this->is_shared(), "class should be shared");
+    if (MetaspaceShared::is_in_shared_space(_cached_class_file)) {
+      return _cached_class_file;
+    } else {
+      return NULL;
+    }
+  }
+}
+#endif

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2020, Oracle and/or its affiliates. All rights reserved
+ * Copyright (c) 1997, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -65,6 +65,7 @@
 #include "runtime/orderAccess.inline.hpp"
 #include "runtime/os.hpp"
 #include "runtime/perfData.hpp"
+#include "runtime/quickStart.hpp"
 #include "runtime/reflection.hpp"
 #include "runtime/vframe.hpp"
 #include "runtime/vm_operations.hpp"
@@ -446,9 +447,10 @@ JVM_ENTRY(jobject, JVM_InitProperties(JNIEnv *env, jobject properties))
 
   const char* enableSharedLookupCache = "false";
 #if INCLUDE_CDS
-  if (ClassLoaderExt::is_lookup_cache_enabled()) {
-    enableSharedLookupCache = "true";
-  }
+  // following function has been deleted from ClassLoaderExt
+  // if (ClassLoaderExt::is_lookup_cache_enabled()) {
+  //   enableSharedLookupCache = "true";
+  // }
 #endif
   PUTPROP(props, "sun.cds.enableSharedLookupCache", enableSharedLookupCache);
 
@@ -476,16 +478,6 @@ JVM_END
 // java.lang.Runtime /////////////////////////////////////////////////////////////////////////
 
 extern volatile jint vm_created;
-
-JVM_ENTRY_NO_ENV(void, JVM_Exit(jint code))
-  if (vm_created != 0 && (code == 0)) {
-    // The VM is about to exit. We call back into Java to check whether finalizers should be run
-    Universe::run_finalizers_on_exit();
-  }
-  before_exit(thread);
-  vm_exit(code);
-JVM_END
-
 
 JVM_ENTRY_NO_ENV(void, JVM_BeforeHalt())
   JVMWrapper("JVM_BeforeHalt");
@@ -1005,6 +997,11 @@ JVM_ENTRY(jintArray, JVM_GetResourceLookupCache(JNIEnv *env, jobject loader, con
 #endif
 JVM_END
 
+JVM_ENTRY(void, JVM_NotifyDump(JNIEnv *env, jclass ignored))
+  JVMWrapper("JVM_NotifyDump");
+  QuickStart::notify_dump();
+JVM_END
+
 
 // Returns a class loaded by the bootstrap class loader; or null
 // if not found.  ClassNotFoundException is not thrown.
@@ -1244,7 +1241,7 @@ JVM_ENTRY(jclass, JVM_DefineClassWithSourceCond(JNIEnv *env, const char *name,
   return jvm_define_class_common(env, name, loader, buf, len, pd, source, verify, THREAD);
 JVM_END
 
-JVM_ENTRY(jclass, JVM_FindLoadedClass(JNIEnv *env, jobject loader, jstring name))
+JVM_ENTRY(jclass, JVM_FindLoadedClass(JNIEnv *env, jobject loader, jstring name, jboolean onlyFind))
   JVMWrapper("JVM_FindLoadedClass");
   ResourceMark rm(THREAD);
 
@@ -1278,7 +1275,7 @@ JVM_ENTRY(jclass, JVM_FindLoadedClass(JNIEnv *env, jobject loader, jstring name)
                                                               Handle(),
                                                               CHECK_NULL);
 #if INCLUDE_CDS
-  if (k == NULL) {
+  if (k == NULL && !onlyFind) {
     // If the class is not already loaded, try to see if it's in the shared
     // archive for the current classloader (h_loader).
     instanceKlassHandle ik = SystemDictionaryShared::find_or_load_shared_class(
@@ -2582,6 +2579,20 @@ JVM_ENTRY(jobject, JVM_AssertionStatusDirectives(JNIEnv *env, jclass unused))
   oop asd = JavaAssertions::createAssertionStatusDirectives(CHECK_NULL);
   return JNIHandles::make_local(env, asd);
 JVM_END
+
+JVM_ENTRY(jclass, JVM_DefineClassFromCDS(JNIEnv *env, jclass clz, jobject loader, jobject pd, jlong iklass))
+  JVMWrapper("JVM_DefineClassFromCDS");
+  ResourceMark rm(THREAD);
+  HandleMark hm(THREAD);
+
+  Handle protection_domain (THREAD, JNIHandles::resolve(pd));
+  Handle class_loader (THREAD, JNIHandles::resolve(loader));
+  InstanceKlass* loaded = SystemDictionaryShared::define_class_from_cds((InstanceKlass*) iklass, class_loader,
+                                                                        protection_domain, THREAD);
+
+  return loaded ? (jclass)JNIHandles::make_local(env, loaded->java_mirror()) : NULL;
+JVM_END
+
 
 // Verification ////////////////////////////////////////////////////////////////////////////////
 

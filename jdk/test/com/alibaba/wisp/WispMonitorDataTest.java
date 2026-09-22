@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020 Alibaba Group Holding Limited. All Rights Reserved.
+ * Copyright (c) 2023 Alibaba Group Holding Limited. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -98,11 +98,13 @@ public class WispMonitorDataTest {
     }
 
     private static ServerSocket ss;
-    private static final int PORT = 23000;
+    private static int port = 0;
     private static final int BUFFER_SIZE = 1024;
 
     private static void startNetServer() throws IOException {
-        ss = new ServerSocket(PORT);
+        ss = new ServerSocket(port);
+	port = ss.getLocalPort();
+	System.out.println("port get from os = " + port);
         Thread t = new Thread(() -> {
             try {
                 while (true) {
@@ -122,7 +124,7 @@ public class WispMonitorDataTest {
 
     private static void doNetIO() {
         try {
-            Socket so = new Socket("localhost", PORT);
+            Socket so = new Socket("localhost", port);
             OutputStream os = so.getOutputStream();
             os.write(new byte[BUFFER_SIZE]);
             os.flush();

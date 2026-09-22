@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -303,24 +303,20 @@ void Canonicalizer::do_ShiftOp        (ShiftOp*         x) {
     }
     if (t2->is_constant()) {
       if (t->tag() == intTag) {
-        int value = t->as_IntConstant()->value();
-        int shift = t2->as_IntConstant()->value() & 31;
-        jint mask = ~(~0 << (32 - shift));
-        if (shift == 0) mask = ~0;
+        jint value = t->as_IntConstant()->value();
+        jint shift = t2->as_IntConstant()->value();
         switch (x->op()) {
-          case Bytecodes::_ishl:  set_constant(value << shift); return;
-          case Bytecodes::_ishr:  set_constant(value >> shift); return;
-          case Bytecodes::_iushr: set_constant((value >> shift) & mask); return;
+          case Bytecodes::_ishl:  set_constant(java_shift_left(value, shift)); return;
+          case Bytecodes::_ishr:  set_constant(java_shift_right(value, shift)); return;
+          case Bytecodes::_iushr: set_constant(java_shift_right_unsigned(value, shift)); return;
         }
       } else if (t->tag() == longTag) {
         jlong value = t->as_LongConstant()->value();
-        int shift = t2->as_IntConstant()->value() & 63;
-        jlong mask = ~(~jlong_cast(0) << (64 - shift));
-        if (shift == 0) mask = ~jlong_cast(0);
+        jint shift = t2->as_IntConstant()->value();
         switch (x->op()) {
-          case Bytecodes::_lshl:  set_constant(value << shift); return;
-          case Bytecodes::_lshr:  set_constant(value >> shift); return;
-          case Bytecodes::_lushr: set_constant((value >> shift) & mask); return;
+          case Bytecodes::_lshl:  set_constant(java_shift_left(value, shift)); return;
+          case Bytecodes::_lshr:  set_constant(java_shift_right(value, shift)); return;
+          case Bytecodes::_lushr: set_constant(java_shift_right_unsigned(value, shift)); return;
         }
       }
     }
@@ -463,7 +459,7 @@ void Canonicalizer::do_Intrinsic      (Intrinsic*       x) {
     InstanceConstant* c = x->argument_at(0)->type()->as_InstanceConstant();
     if (c != NULL && !c->value()->is_null_object()) {
       // ciInstance::java_mirror_type() returns non-NULL only for Java mirrors
-      ciType* t = c->value()->as_instance()->java_mirror_type();
+      ciType* t = c->value()->java_mirror_type();
       if (t->is_klass()) {
         // substitute cls.isInstance(obj) of a constant Class into
         // an InstantOf instruction
@@ -476,6 +472,17 @@ void Canonicalizer::do_Intrinsic      (Intrinsic*       x) {
         // cls.isInstance(obj) always returns false for primitive classes
         set_constant(0);
       }
+    }
+    break;
+  }
+  case vmIntrinsics::_isPrimitive        : {
+    assert(x->number_of_arguments() == 1, "wrong type");
+
+    // Class.isPrimitive is known on constant classes:
+    InstanceConstant* c = x->argument_at(0)->type()->as_InstanceConstant();
+    if (c != NULL && !c->value()->is_null_object()) {
+      ciType* t = c->value()->java_mirror_type();
+      set_constant(t->is_primitive_type());
     }
     break;
   }

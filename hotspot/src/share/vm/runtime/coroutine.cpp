@@ -114,6 +114,7 @@ Coroutine* Coroutine::create_thread_coroutine(JavaThread* thread, CoroutineStack
   coro->_java_call_counter = 0;
   coro->_last_native_call_counter = 0;
   coro->_native_call_counter = 0;
+  coro->_initiating_loader = NULL;
 #if defined(_WINDOWS)
   coro->_last_SEH = NULL;
 #endif
@@ -163,6 +164,7 @@ Coroutine* Coroutine::create_coroutine(JavaThread* thread, CoroutineStack* stack
   coro->_java_call_counter = 0;
   coro->_last_native_call_counter = 0;
   coro->_native_call_counter = 0;
+  coro->_initiating_loader = NULL;
 #if defined(_WINDOWS)
   coro->_last_SEH = NULL;
 #endif
@@ -963,6 +965,10 @@ const char* WispThread::print_blocking_status(int status) {
   default:
     return "";
   }
+}
+
+void WispThread::oops_do(OopClosure *f, CLDClosure *cld_f, CodeBlobClosure *cf) {
+  f->do_oop((oop*) &_threadObj);
 }
 
 void Coroutine::after_safepoint(JavaThread* thread) {

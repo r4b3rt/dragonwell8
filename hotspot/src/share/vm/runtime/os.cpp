@@ -274,11 +274,33 @@ static void signal_thread_entry(JavaThread* thread, TRAPS) {
 
     switch (sig) {
       case SIGBREAK: {
+#if INCLUDE_SERVICES
         // Check if the signal is a trigger to start the Attach Listener - in that
         // case don't print stack traces.
-        if (!DisableAttachMechanism && AttachListener::is_init_trigger()) {
-          continue;
+        if (!DisableAttachMechanism) {
+          // Attempt to transit state to AL_INITIALIZING.
+          jlong cur_state = AttachListener::transit_state(AL_INITIALIZING, AL_NOT_INITIALIZED);
+          if (cur_state == AL_INITIALIZING) {
+            // Attach Listener has been started to initialize. Ignore this signal.
+            continue;
+          } else if (cur_state == AL_NOT_INITIALIZED) {
+            // Start to initialize.
+            if (AttachListener::is_init_trigger()) {
+              // Attach Listener has been initialized.
+              // Accept subsequent request.
+              continue;
+            } else {
+              // Attach Listener could not be started.
+              // So we need to transit the state to AL_NOT_INITIALIZED.
+              AttachListener::set_state(AL_NOT_INITIALIZED);
+            }
+          } else if (AttachListener::check_socket_file()) {
+            // Attach Listener has been started, but unix domain socket file
+            // does not exist. So restart Attach Listener.
+            continue;
+          }
         }
+#endif
         // Print stack traces
         // Any SIGBREAK operations added here should make sure to flush
         // the output stream (e.g. tty->flush()) after output.  See 4803766.
@@ -601,7 +623,7 @@ void* os::malloc(size_t size, MEMFLAGS memflags, const NativeCallStack& stack) {
 
   // Since os::malloc can be called when the libjvm.{dll,so} is
   // first loaded and we don't have a thread yet we must accept NULL also here.
-  assert(!os::ThreadCrashProtection::is_crash_protected(ThreadLocalStorage::thread()),
+  assert(!os::ThreadCrashProtection::is_crash_protected(Thread::current_or_null()),
          "malloc() not allowed when crash protection is set");
 
   if (size == 0) {
@@ -613,6 +635,11 @@ void* os::malloc(size_t size, MEMFLAGS memflags, const NativeCallStack& stack) {
   // NMT support
   NMT_TrackingLevel level = MemTracker::tracking_level();
   size_t            nmt_header_size = MemTracker::malloc_header_size(level);
+
+  // Check for overflow.
+  if (size + nmt_header_size < size) {
+    return NULL;
+  }
 
 #ifndef ASSERT
   const size_t alloc_size = size + nmt_header_size;
@@ -869,8 +896,12 @@ void os::print_date_and_time(outputStream *st, char* buf, size_t buflen) {
 
   struct tm tz;
   if (localtime_pd(&tloc, &tz) != NULL) {
-    ::strftime(buf, buflen, "%Z", &tz);
-    st->print_cr("timezone: %s", buf);
+    wchar_t w_buf[80];
+    size_t n = ::wcsftime(w_buf, 80, L"%Z", &tz);
+    if (n > 0) {
+      ::wcstombs(buf, w_buf, buflen);
+      st->print_cr("timezone: %s", buf);
+    }
   }
 
   double t = os::elapsedTime();
@@ -1191,6 +1222,32 @@ char* os::format_boot_path(const char* format_string,
     return formatted_path;
 }
 
+// This function is a proxy to fopen, it tries to add a non standard flag ('e' or 'N')
+// that ensures automatic closing of the file on exec. If it can not find support in
+// the underlying c library, it will make an extra system call (fcntl) to ensure automatic
+// closing of the file on exec.
+FILE* os::fopen(const char* path, const char* mode) {
+  char modified_mode[20];
+  assert(strlen(mode) + 1 < sizeof(modified_mode), "mode chars plus one extra must fit in buffer");
+  sprintf(modified_mode, "%s" LINUX_ONLY("e") BSD_ONLY("e") WINDOWS_ONLY("N"), mode);
+  FILE* file = ::fopen(path, modified_mode);
+
+#if !(defined LINUX || defined BSD || defined _WINDOWS)
+  // assume fcntl FD_CLOEXEC support as a backup solution when 'e' or 'N'
+  // is not supported as mode in fopen
+  if (file != NULL) {
+    int fd = fileno(file);
+    if (fd != -1) {
+      int fd_flags = fcntl(fd, F_GETFD);
+      if (fd_flags != -1) {
+        fcntl(fd, F_SETFD, fd_flags | FD_CLOEXEC);
+      }
+    }
+  }
+#endif
+
+  return file;
+}
 
 bool os::set_boot_path(char fileSep, char pathSep) {
     const char* home = Arguments::get_java_home();

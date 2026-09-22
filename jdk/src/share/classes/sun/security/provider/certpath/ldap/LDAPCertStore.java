@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -46,6 +46,7 @@ import java.security.*;
 import java.security.cert.Certificate;
 import java.security.cert.*;
 import javax.naming.ldap.LdapContext;
+import javax.naming.ldap.LdapName;
 import javax.security.auth.x500.X500Principal;
 
 import com.sun.jndi.ldap.LdapReferralException;
@@ -53,6 +54,7 @@ import sun.misc.HexDumpEncoder;
 import sun.security.provider.certpath.X509CertificatePair;
 import sun.security.util.Cache;
 import sun.security.util.Debug;
+import sun.security.util.SecurityProperties;
 import sun.security.x509.X500Name;
 import sun.security.action.GetBooleanAction;
 import sun.security.action.GetPropertyAction;
@@ -148,6 +150,16 @@ public final class LDAPCertStore extends CertStoreSpi {
     private final static String PROP_DISABLE_APP_RESOURCE_FILES =
         "sun.security.certpath.ldap.disable.app.resource.files";
 
+    /**
+     * Maximum size for a CRL downloaded through an LDAPCertStoreImpl
+     * in bytes. This can be controlled by the com.sun.security.crl.maxSize
+     * Security or System property. The System property, if set, overrides
+     * the Security property. The default size is 20MiB.
+     */
+    private static final long MAX_CRL_DOWNLOAD_SIZE =
+            SecurityProperties.getOverridableLongProp(
+                    "com.sun.security.crl.maxSize", 20971520, debug);
+
     static {
         String s = AccessController.doPrivileged(
                                 new GetPropertyAction(PROP_LIFETIME));
@@ -155,6 +167,13 @@ public final class LDAPCertStore extends CertStoreSpi {
             LIFETIME = Integer.parseInt(s); // throws NumberFormatException
         } else {
             LIFETIME = DEFAULT_CACHE_LIFETIME;
+        }
+
+        // Add a debug message for the configured CRL download limit
+        if (debug != null) {
+            debug.println("Maximum downloadable CRL size: " +
+                    MAX_CRL_DOWNLOAD_SIZE +
+                    ((MAX_CRL_DOWNLOAD_SIZE < 0) ? " (DISABLED)" : ""));
         }
     }
 
@@ -290,6 +309,49 @@ public final class LDAPCertStore extends CertStoreSpi {
         }
     }
 
+    private static String checkName(String name) throws CertStoreException {
+        if (name == null) {
+            throw new CertStoreException("Name absent");
+        }
+        try {
+            if (new CompositeName(name).size() > 1) {
+                throw new CertStoreException("Invalid name: " + name);
+            }
+        } catch (InvalidNameException ine) {
+            throw new CertStoreException("Invalid name: " + name, ine);
+        }
+        return name;
+    }
+
+    /**
+     * Get the values for the given attribute. If the attribute is null
+     * or does not contain any values, a zero length byte array is
+     * returned. NOTE that it is assumed that all values are byte arrays.
+     */
+    private static byte[][] getAttributeValues(Attribute attr)
+            throws NamingException {
+        byte[][] values;
+        if (attr == null) {
+            values = BB0;
+        } else {
+            values = new byte[attr.size()][];
+            int i = 0;
+            NamingEnumeration<?> enum_ = attr.getAll();
+            while (enum_.hasMore()) {
+                Object obj = enum_.next();
+                if (debug != null) {
+                    if (obj instanceof String) {
+                        debug.println("LDAPCertStore.getAttrValues() "
+                            + "enum.next is a string!: " + obj);
+                    }
+                }
+                byte[] value = (byte[])obj;
+                values[i++] = value;
+            }
+        }
+        return values;
+    }
+
     /**
      * Private class encapsulating the actual LDAP operations and cache
      * handling. Use:
@@ -308,31 +370,20 @@ public final class LDAPCertStore extends CertStoreSpi {
      */
     private class LDAPRequest {
 
-        private final String name;
+        private final LdapName name;
         private Map<String, byte[][]> valueMap;
         private final List<String> requestedAttributes;
 
         LDAPRequest(String name) throws CertStoreException {
-            this.name = checkName(name);
-            requestedAttributes = new ArrayList<>(5);
-        }
-
-        private String checkName(String name) throws CertStoreException {
-            if (name == null) {
-                throw new CertStoreException("Name absent");
-            }
             try {
-                if (new CompositeName(name).size() > 1) {
-                    throw new CertStoreException("Invalid name: " + name);
-                }
+                // Convert DN to an LdapName so that it is not treated as a
+                // composite name by JNDI. In JNDI, using a string name is
+                // equivalent to calling new CompositeName(stringName).
+                this.name = new LdapName(name);
             } catch (InvalidNameException ine) {
                 throw new CertStoreException("Invalid name: " + name, ine);
             }
-            return name;
-        }
-
-        String getName() {
-            return name;
+            requestedAttributes = new ArrayList<>(5);
         }
 
         void addRequestedAttribute(String attrId) {
@@ -409,6 +460,9 @@ public final class LDAPCertStore extends CertStoreSpi {
                         if (newDn != null && newDn.charAt(0) == '/') {
                             newDn = newDn.substring(1);
                         }
+                        // In JNDI, it is not possible to use an LdapName for
+                        // the referral DN, so we must validate the syntax of
+                        // the string DN.
                         checkName(newDn);
                     } catch (Exception e) {
                         throw new NamingException("Cannot follow referral to "
@@ -450,36 +504,6 @@ public final class LDAPCertStore extends CertStoreSpi {
             String cacheKey = name + "|" + attrId;
             valueCache.put(cacheKey, values);
         }
-
-        /**
-         * Get the values for the given attribute. If the attribute is null
-         * or does not contain any values, a zero length byte array is
-         * returned. NOTE that it is assumed that all values are byte arrays.
-         */
-        private byte[][] getAttributeValues(Attribute attr)
-                throws NamingException {
-            byte[][] values;
-            if (attr == null) {
-                values = BB0;
-            } else {
-                values = new byte[attr.size()][];
-                int i = 0;
-                NamingEnumeration<?> enum_ = attr.getAll();
-                while (enum_.hasMore()) {
-                    Object obj = enum_.next();
-                    if (debug != null) {
-                        if (obj instanceof String) {
-                            debug.println("LDAPCertStore.getAttrValues() "
-                                + "enum.next is a string!: " + obj);
-                        }
-                    }
-                    byte[] value = (byte[])obj;
-                    values[i++] = value;
-                }
-            }
-            return values;
-        }
-
     }
 
     /*
@@ -757,12 +781,12 @@ public final class LDAPCertStore extends CertStoreSpi {
         return certs;
     }
 
-    /*
+    /**
      * Gets CRLs from an attribute id and location in the LDAP directory.
      * Returns a Collection containing only the CRLs that match the
      * specified CRLSelector.
      *
-     * @param name the location holding the attribute
+     * @param request the LDAP request used for this CRL fetch operation
      * @param id the attribute identifier
      * @param sel a CRLSelector that the CRLs must match
      * @return a Collection of CRLs found
@@ -774,7 +798,26 @@ public final class LDAPCertStore extends CertStoreSpi {
         /* fetch the encoded crls from storage */
         byte[][] encodedCRL;
         try {
-            encodedCRL = request.getValues(id);
+            byte[][] tmpCrls = request.getValues(id);
+            if (MAX_CRL_DOWNLOAD_SIZE > -1) {
+                int totalSize = 0;
+                for (byte[] tCrl : tmpCrls) {
+                    totalSize += tCrl.length;
+                }
+                if (totalSize <= MAX_CRL_DOWNLOAD_SIZE) {
+                    encodedCRL = tmpCrls;
+                } else {
+                    if (debug != null) {
+                        debug.println("Received " + tmpCrls.length +
+                                " CRL(s). Combined length of " + totalSize +
+                                " exceeds configured maximum.  Discarding.");
+                    }
+                    encodedCRL = new byte[0][];
+                }
+            } else {
+                // Download limits disabled
+                encodedCRL = tmpCrls;
+            }
         } catch (NamingException namingEx) {
             throw new CertStoreException(namingEx);
         }
@@ -867,9 +910,13 @@ public final class LDAPCertStore extends CertStoreSpi {
                 } catch (IllegalArgumentException e) {
                     continue;
                 }
-            } else {
+            } else if (nameObject instanceof String) {
                 issuerName = (String)nameObject;
+            } else {
+                throw new CertStoreException(
+                    "unrecognized issuerName: must be String or byte[]");
             }
+
             // If all we want is CA certs, try to get the (probably shorter) ARL
             Collection<X509CRL> entryCRLs = Collections.emptySet();
             if (certChecking == null || certChecking.getBasicConstraints() != -1) {

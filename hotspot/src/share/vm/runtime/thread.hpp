@@ -298,6 +298,9 @@ class Thread: public ThreadShadow {
   // ObjectMonitor on which this thread called Object.wait()
   ObjectMonitor* _current_waiting_monitor;
 
+protected:
+  ClassLoaderData* _initiating_loader;
+
   // Private thread-local objectmonitor list - a simple cache organized as a SLL.
  public:
   ObjectMonitor* omFreeList;
@@ -335,6 +338,7 @@ class Thread: public ThreadShadow {
   virtual bool is_Java_thread()     const            { return false; }
   virtual bool is_Wisp_thread()     const            { return false; }
   virtual bool is_Compiler_thread() const            { return false; }
+  virtual bool is_service_thread() const             { return false; }
   virtual bool is_hidden_from_external_view() const  { return false; }
   virtual bool is_jvmti_agent_thread() const         { return false; }
   // True iff the thread can perform GC operations at a safepoint.
@@ -505,6 +509,13 @@ class Thread: public ThreadShadow {
     _current_waiting_monitor = monitor;
   }
 
+  ClassLoaderData* initiating_loader() {
+    return _initiating_loader;
+  }
+
+  void set_initiating_loader(ClassLoaderData* loader) {
+    _initiating_loader = loader;
+  }
   // GC support
   // Apply "f->do_oop" to all root oops in "this".
   // Apply "cld_f->do_cld" to CLDs that are otherwise not kept alive.
@@ -534,7 +545,7 @@ public:
   }
 
   // Sweeper support
-  void nmethods_do(CodeBlobClosure* cf);
+  virtual void nmethods_do(CodeBlobClosure* cf);
 
   // jvmtiRedefineClasses support
   void metadata_do(void f(Metadata*));
@@ -596,7 +607,7 @@ protected:
   void    set_lgrp_id(int value) { _lgrp_id = value; }
 
   // Printing
-  void print_on(outputStream* st) const;
+  virtual void print_on(outputStream* st) const;
   void print() const { print_on(tty); }
   virtual void print_on_error(outputStream* st, char* buf, int buflen) const;
 
@@ -747,10 +758,12 @@ class NamedThread: public Thread {
   ~NamedThread();
   // May only be called once per thread.
   void set_name(const char* format, ...)  ATTRIBUTE_PRINTF(2, 3);
+  void initialize_named_thread();
   virtual bool is_Named_thread() const { return true; }
   virtual char* name() const { return _name == NULL ? (char*)"Unknown Thread" : _name; }
   JavaThread *processed_thread() { return _processed_thread; }
   void set_processed_thread(JavaThread *thread) { _processed_thread = thread; }
+  virtual void print_on(outputStream* st) const;
 };
 
 // Worker threads are named and have an id of an assigned work.
@@ -795,7 +808,6 @@ class WatcherThread: public Thread {
   // Printing
   char* name() const { return (char*)"VM Periodic Task Thread"; }
   void print_on(outputStream* st) const;
-  void print() const { print_on(tty); }
   void unpark();
 
   // Returns the single instance of WatcherThread
@@ -818,7 +830,9 @@ typedef void (*ThreadFunction)(JavaThread*, TRAPS);
 
 class JavaThread: public Thread {
   friend class VMStructs;
+  friend class WispThread;
  private:
+  bool           _in_asgct;                      // Is set when this JavaThread is handling ASGCT call
   JavaThread*    _next;                          // The next thread in the Threads list
   oop            _threadObj;                     // The Java level thread object
   oop            _tenantObj;                     // The tenant object which this java thread attaches to
@@ -1444,6 +1458,7 @@ class JavaThread: public Thread {
   static ByteSize vm_result_2_offset()           { return byte_offset_of(JavaThread, _vm_result_2         ); }
   static ByteSize vm_result_for_wisp_offset()    { return byte_offset_of(JavaThread, _vm_result_for_wisp ); }
   static ByteSize thread_state_offset()          { return byte_offset_of(JavaThread, _thread_state        ); }
+  static ByteSize thread_stat_offset()           { return byte_offset_of(JavaThread, _thread_stat         ); }
   static ByteSize saved_exception_pc_offset()    { return byte_offset_of(JavaThread, _saved_exception_pc  ); }
   static ByteSize osthread_offset()              { return byte_offset_of(JavaThread, _osthread            ); }
   static ByteSize exception_oop_offset()         { return byte_offset_of(JavaThread, _exception_oop       ); }
@@ -1455,6 +1470,8 @@ class JavaThread: public Thread {
   static ByteSize suspend_flags_offset()         { return byte_offset_of(JavaThread, _suspend_flags       ); }
   static ByteSize java_call_counter_offset()     { return byte_offset_of(JavaThread, _java_call_counter); }
   static ByteSize coroutine_list_offset()        { return byte_offset_of(JavaThread, _coroutine_list); }
+  // AppCDS support
+  static ByteSize initiating_loader_offset()     { return byte_offset_of(JavaThread, _initiating_loader); }
 
   static ByteSize do_not_unlock_if_synchronized_offset() { return byte_offset_of(JavaThread, _do_not_unlock_if_synchronized); }
   static ByteSize should_post_on_exceptions_flag_offset() {
@@ -1532,10 +1549,10 @@ class JavaThread: public Thread {
   void frames_do(void f(frame*, const RegisterMap*));
 
   // Memory operations
-  void oops_do(OopClosure* f, CLDClosure* cld_f, CodeBlobClosure* cf);
+  virtual void oops_do(OopClosure* f, CLDClosure* cld_f, CodeBlobClosure* cf);
 
   // Sweeper operations
-  void nmethods_do(CodeBlobClosure* cf);
+  virtual void nmethods_do(CodeBlobClosure* cf);
 
   // RedefineClasses Support
   void metadata_do(void f(Metadata*));
@@ -1547,7 +1564,6 @@ class JavaThread: public Thread {
   // Misc. operations
   char* name() const { return (char*)get_thread_name(); }
   void print_on(outputStream* st) const;
-  void print() const { print_on(tty); }
   void print_value();
   void print_thread_state_on(outputStream* ) const      PRODUCT_RETURN;
   void print_thread_state() const                       PRODUCT_RETURN;
@@ -1867,6 +1883,10 @@ private:
 public:
   uint get_claimed_par_id() { return _claimed_par_id; }
   void set_claimed_par_id(uint id) { _claimed_par_id = id;}
+
+  // AsyncGetCallTrace support
+  inline bool in_asgct(void) {return _in_asgct;}
+  inline void set_in_asgct(bool value) {_in_asgct = value;}
 };
 
 // Inline implementation of JavaThread::current

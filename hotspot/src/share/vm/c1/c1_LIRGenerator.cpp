@@ -79,6 +79,7 @@ void PhiResolverState::reset(int max_vregs) {
 PhiResolver::PhiResolver(LIRGenerator* gen, int max_vregs)
  : _gen(gen)
  , _state(gen->resolver_state())
+ , _loop(NULL)
  , _temp(LIR_OprFact::illegalOpr)
 {
   // reinitialize the shared state arrays
@@ -1050,20 +1051,21 @@ void LIRGenerator::move_to_phi(ValueStack* cur_state) {
 
 
 LIR_Opr LIRGenerator::new_register(BasicType type) {
-  int vreg = _virtual_register_number;
-  // add a little fudge factor for the bailout, since the bailout is
-  // only checked periodically.  This gives a few extra registers to
-  // hand out before we really run out, which helps us keep from
-  // tripping over assertions.
-  if (vreg + 20 >= LIR_OprDesc::vreg_max) {
-    bailout("out of virtual registers");
-    if (vreg + 2 >= LIR_OprDesc::vreg_max) {
-      // wrap it around
+  int vreg_num = _virtual_register_number;
+  // Add a little fudge factor for the bailout since the bailout is only checked periodically. This allows us to hand out
+  // a few extra registers before we really run out which helps to avoid to trip over assertions.
+  if (vreg_num + 20 >= LIR_OprDesc::vreg_max) {
+    bailout("out of virtual registers in LIR generator");
+    if (vreg_num + 2 >= LIR_OprDesc::vreg_max) {
+      // Wrap it around and continue until bailout really happens to avoid hitting assertions.
       _virtual_register_number = LIR_OprDesc::vreg_base;
+      vreg_num = LIR_OprDesc::vreg_base;
     }
   }
   _virtual_register_number += 1;
-  return LIR_OprFact::virtual_register(vreg, type);
+  LIR_Opr vreg = LIR_OprFact::virtual_register(vreg_num, type);
+  assert(vreg != LIR_OprFact::illegal(), "ran out of virtual registers");
+  return vreg;
 }
 
 
@@ -1301,6 +1303,24 @@ void LIRGenerator::do_getClass(Intrinsic* x) {
   __ move_wide(new LIR_Address(temp, in_bytes(Klass::java_mirror_offset()), T_OBJECT), result);
 }
 
+// java.lang.Class::isPrimitive()
+void LIRGenerator::do_isPrimitive(Intrinsic* x) {
+  assert(x->number_of_arguments() == 1, "wrong type");
+
+  LIRItem rcvr(x->argument_at(0), this);
+  rcvr.load_item();
+  LIR_Opr temp = new_register(T_METADATA);
+  LIR_Opr result = rlock_result(x);
+
+  CodeEmitInfo* info = NULL;
+  if (x->needs_null_check()) {
+    info = state_for(x);
+  }
+
+  __ move(new LIR_Address(rcvr.result(), java_lang_Class::klass_offset_in_bytes(), T_ADDRESS), temp, info);
+  __ cmp(lir_cond_notEqual, temp, LIR_OprFact::metadataConst(0));
+  __ cmove(lir_cond_notEqual, LIR_OprFact::intConst(0), LIR_OprFact::intConst(1), result, T_BOOLEAN);
+}
 
 // Example: Thread.currentThread()
 void LIRGenerator::do_currentThread(Intrinsic* x) {
@@ -3197,6 +3217,7 @@ void LIRGenerator::do_Intrinsic(Intrinsic* x) {
 
   case vmIntrinsics::_Object_init:    do_RegisterFinalizer(x); break;
   case vmIntrinsics::_isInstance:     do_isInstance(x);    break;
+  case vmIntrinsics::_isPrimitive:    do_isPrimitive(x);   break;
   case vmIntrinsics::_getClass:       do_getClass(x);      break;
   case vmIntrinsics::_currentThread:  do_currentThread(x); break;
 

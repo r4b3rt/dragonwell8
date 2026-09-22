@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -128,9 +128,6 @@ JVM_CopySwapMemory(JNIEnv *env, jobject srcObj, jlong srcOffset,
 /*
  * java.lang.Runtime
  */
-JNIEXPORT void JNICALL
-JVM_Exit(jint code);
-
 JNIEXPORT void JNICALL
 JVM_BeforeHalt();
 
@@ -494,7 +491,7 @@ JVM_FindClassFromClass(JNIEnv *env, const char *name, jboolean init,
 
 /* Find a loaded class cached by the VM */
 JNIEXPORT jclass JNICALL
-JVM_FindLoadedClass(JNIEnv *env, jobject loader, jstring name);
+JVM_FindLoadedClass(JNIEnv *env, jobject loader, jstring name, jboolean onlyFind);
 
 /* Define a class */
 JNIEXPORT jclass JNICALL
@@ -693,6 +690,8 @@ JVM_FindSignal(const char *name);
 JNIEXPORT jboolean JNICALL
 JVM_DesiredAssertionStatus(JNIEnv *env, jclass unused, jclass cls);
 
+JNIEXPORT jclass JNICALL
+JVM_DefineClassFromCDS(JNIEnv *env, jclass clz, jobject loader, jobject pd, jlong iklass);
 /*
  * Retrieve the assertion directives from the VM.
  */
@@ -1493,6 +1492,8 @@ JVM_GetResourceLookupCacheURLs(JNIEnv *env, jobject loader);
 JNIEXPORT jintArray JNICALL
 JVM_GetResourceLookupCache(JNIEnv *env, jobject loader, const char *resource_name);
 
+JNIEXPORT void JNICALL
+JVM_NotifyDump(JNIEnv *env, jclass ignored);
 
 /* =========================================================================
  * The following defines a private JVM interface that the JDK can query

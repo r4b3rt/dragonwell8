@@ -38,6 +38,7 @@
 #include "runtime/arguments_ext.hpp"
 #include "runtime/globals_extension.hpp"
 #include "runtime/java.hpp"
+#include "runtime/quickStart.hpp"
 #include "services/management.hpp"
 #include "services/memTracker.hpp"
 #include "utilities/defaultStream.hpp"
@@ -932,6 +933,9 @@ bool Arguments::process_argument(const char* arg,
       jio_fprintf(defaultStream::error_stream(), "%s", locked_message_buf);
     }
   } else {
+    if (ignore_unrecognized) {
+      return true;
+    }
     jio_fprintf(defaultStream::error_stream(),
                 "Unrecognized VM option '%s'\n", argname);
     Flag* fuzzy_matched = Flag::fuzzy_match((const char*)argname, arg_len, true);
@@ -1161,12 +1165,7 @@ void Arguments::set_tiered_flags() {
   }
   // Increase the code cache size - tiered compiles a lot more.
   if (FLAG_IS_DEFAULT(ReservedCodeCacheSize)) {
-#ifndef AARCH64
     FLAG_SET_DEFAULT(ReservedCodeCacheSize, ReservedCodeCacheSize * 5);
-#else
-    FLAG_SET_DEFAULT(ReservedCodeCacheSize,
-                     MIN2(CODE_CACHE_DEFAULT_LIMIT, ReservedCodeCacheSize * 5));
-#endif
   }
   if (!UseInterpreter) { // -Xcomp
     Tier3InvokeNotifyFreqLog = 0;
@@ -1601,7 +1600,7 @@ void Arguments::select_gc_ergonomically() {
 
 void Arguments::select_gc() {
   if (!gc_selected()) {
-    FLAG_SET_ERGO(bool, UseConcMarkSweepGC, true);
+    select_gc_ergonomically();
   }
 }
 
@@ -1665,6 +1664,16 @@ void Arguments::set_parallel_gc_flags() {
       FLAG_SET_DEFAULT(MaxHeapFreeRatio, 100);
       _max_heap_free_ratio = MaxHeapFreeRatio;
     }
+    if (FLAG_IS_DEFAULT(UseIOPrioritySizePolicy)) {
+      FLAG_SET_DEFAULT(UseIOPrioritySizePolicy, true);
+    }
+  }
+
+  if (UseIOPrioritySizePolicy && !UseAdaptiveSizePolicy) {
+    // User explicitly enable UseIOPrioritySizePolicy but disable UseAdaptiveSizePolicy,
+    // this is a wrong usage.
+    UseIOPrioritySizePolicy = false;
+    warning("UseIOPrioritySizePolicy requires UseAdaptiveSizePolicy to be enabled");
   }
 
   // If InitialSurvivorRatio or MinSurvivorRatio were not specified, but the
@@ -2771,6 +2780,7 @@ jint Arguments::parse_vm_init_args(const JavaVMInitArgs* args) {
   // For components of the system classpath.
   SysClassPath scp(Arguments::get_sysclasspath());
   bool scp_assembly_required = false;
+  bool enable_tool_options = is_enable_tool_options(args);
 
   // Save default settings for some mode flags
   Arguments::_AlwaysCompileLoopMethods = AlwaysCompileLoopMethods;
@@ -2782,7 +2792,13 @@ jint Arguments::parse_vm_init_args(const JavaVMInitArgs* args) {
   set_mode_flags(_mixed);
 
   // Parse JAVA_TOOL_OPTIONS environment variable (if present)
-  jint result = parse_java_tool_options_environment_variable(&scp, &scp_assembly_required);
+  jint result = parse_java_tool_options_environment_variable(&scp, &scp_assembly_required, enable_tool_options);
+  if (result != JNI_OK) {
+    return result;
+  }
+
+  // Parse DRAGONWELL_JAVA_TOOL_OPTIONS environment variable (if present)
+  result = parse_dragonwell_options_environment_variable(&scp, &scp_assembly_required, enable_tool_options);
   if (result != JNI_OK) {
     return result;
   }
@@ -3261,6 +3277,20 @@ jint Arguments::parse_each_vm_init_arg(const JavaVMInitArgs* args,
       }
       FLAG_SET_CMDLINE(bool, PrintGC, true);
       FLAG_SET_CMDLINE(bool, PrintGCTimeStamps, true);
+    } else if (match_option(option, "-Xquickstart", &tail)) {
+      bool ret = false;
+      if (*tail == '\0') {
+        ret = QuickStart::parse_command_line_arguments();
+        assert(ret, "-Xquickstart without arguments should never fail to parse");
+      } else if (*tail == ':') {
+        ret = QuickStart::parse_command_line_arguments(tail + 1);
+      }
+      if (!ret) {
+        jio_fprintf(defaultStream::error_stream(),
+                    "Invalid -Xquickstart option '-Xquickstart%s', see the error log for details.\n",
+                    tail);
+        return JNI_EINVAL;
+      }
 
     // JNI hooks
     } else if (match_option(option, "-Xcheck", &tail)) {
@@ -3458,6 +3488,9 @@ jint Arguments::parse_each_vm_init_arg(const JavaVMInitArgs* args,
     } else if (match_jfr_option(&option)) {
       return JNI_EINVAL;
 #endif
+    } else if (match_option(option, "-XX:+IgnoreUnrecognizedVMOptions", &tail)) {
+      *(jboolean*)(&args->ignoreUnrecognized) = true;
+      FLAG_SET_CMDLINE(bool, IgnoreUnrecognizedVMOptions, true);
     } else if (match_option(option, "-XX:", &tail)) { // -XX:xxxx
       // Skip -XX:Flags= since that case has already been handled
       if (strncmp(tail, "Flags=", strlen("Flags=")) != 0) {
@@ -3760,14 +3793,50 @@ jint Arguments::finalize_vm_init_args(SysClassPath* scp_p, bool scp_assembly_req
   return JNI_OK;
 }
 
+bool Arguments::is_enable_tool_options(const JavaVMInitArgs *args) {
+  bool enable = true;
+  const int OPTION_BUFFER_SIZE = 64;
+  char buffer[OPTION_BUFFER_SIZE];
+  const char* sun_tool_package = "sun.tools.";
+  if (os::getenv("DRAGONWELL_JAVA_TOOL_OPTIONS_JDK_ONLY", buffer, sizeof(buffer))) {
+    if (strcmp(buffer,"true") == 0) {
+      int index;
+      const char* tail = NULL;
+      for (index = 0; index < args->nOptions; index++) {
+        const JavaVMOption *option = args->options + index;
+        if (match_option(option, "-Dsun.java.command=", &tail)) {
+          break;
+        }
+      }
+      //if no -Dsun.java.command like :java -version
+      //or JDK builtin tools
+      if (NULL == tail || strncmp(sun_tool_package, tail, strlen(sun_tool_package)) == 0) {
+        enable = false;
+      }
+    }
+  }
+  return enable;
+}
 jint Arguments::parse_java_options_environment_variable(SysClassPath* scp_p, bool* scp_assembly_required_p) {
   return parse_options_environment_variable("_JAVA_OPTIONS", scp_p,
                                             scp_assembly_required_p);
 }
 
-jint Arguments::parse_java_tool_options_environment_variable(SysClassPath* scp_p, bool* scp_assembly_required_p) {
+jint Arguments::parse_java_tool_options_environment_variable(SysClassPath* scp_p, bool* scp_assembly_required_p, bool enable_tool_options) {
+  if (enable_tool_options) {
   return parse_options_environment_variable("JAVA_TOOL_OPTIONS", scp_p,
                                             scp_assembly_required_p);
+  } else {
+    return JNI_OK;
+  }
+}
+jint Arguments::parse_dragonwell_options_environment_variable(SysClassPath* scp_p, bool* scp_assembly_required_p, bool enable_tool_options) {
+  if (enable_tool_options) {
+    return parse_options_environment_variable("DRAGONWELL_JAVA_TOOL_OPTIONS", scp_p,
+                                              scp_assembly_required_p);
+  } else {
+    return JNI_OK;
+  }
 }
 
 jint Arguments::parse_options_environment_variable(const char* name, SysClassPath* scp_p, bool* scp_assembly_required_p) {
@@ -3992,6 +4061,23 @@ jint Arguments::parse(const JavaVMInitArgs* args) {
 #endif
     }
 
+    // If UseAppCDS, we need to unlock SharedArchiveFile so can be used under product.
+    if (match_option(option, "-XX:+UseAppCDS", &tail)) {
+      Flag* flag = Flag::find_flag("SharedArchiveFile", 17, true, true);
+      if (flag->is_diagnostic()) {
+        flag->unlock_diagnostic();
+      }
+      continue;
+    }
+
+    // If -UseAppCDS, we need to set SharedArchiveFile to default
+    if (match_option(option, "-XX:-UseAppCDS", &tail)) {
+      Flag* flag = Flag::find_flag("SharedArchiveFile", 17, true, true);
+      if (!flag->is_diagnostic()) {
+        flag->set_origin(flag->get_origin());
+      }
+      continue;
+    }
 
 #ifndef PRODUCT
     if (match_option(option, "-XX:+PrintFlagsWithComments", &tail)) {
@@ -4038,6 +4124,10 @@ jint Arguments::parse(const JavaVMInitArgs* args) {
   jint result = parse_vm_init_args(args);
   if (result != JNI_OK) {
     return result;
+  }
+
+  if (QuickStart::is_enabled()) {
+    QuickStart::post_process_arguments(args);
   }
 
   // Call get_shared_archive_path() here, after possible SharedArchiveFile option got parsed.
@@ -4146,6 +4236,19 @@ jint Arguments::parse(const JavaVMInitArgs* args) {
   }
 #endif
 
+  if (EagerAppCDS) {
+    UseAppCDS = true;
+    if (!FLAG_IS_CMDLINE(NotFoundClassOpt)) {
+      NotFoundClassOpt = true;
+    }
+    // Need to use Classes4CDS.java to parse the result.
+    DumpAppCDSWithKlassId = true;
+  }
+
+  if (UseBigDecimalOpt) {
+    PropertyList_add(&_system_properties, new SystemProperty("java.math.BigDecimal.optimization", "true", true));
+  }
+
   // Set object alignment values.
   set_object_alignment();
 
@@ -4204,7 +4307,6 @@ jint Arguments::apply_ergo() {
   if (FLAG_IS_DEFAULT(NmethodSweepFraction)) {
     FLAG_SET_DEFAULT(NmethodSweepFraction, 1 + ReservedCodeCacheSize / (16 * M));
   }
-
 
   // Set heap size based on available physical memory
   set_heap_size();
@@ -4322,6 +4424,14 @@ jint Arguments::apply_ergo() {
       FLAG_SET_DEFAULT(PauseAtExit, true);
     }
   }
+
+#if INCLUDE_CDS
+  if (DumpSharedSpaces) {
+    // Disable biased locking now as it interferes with the clean up of
+    // the archived Klasses and Java string objects (at dump time only).
+    UseBiasedLocking = false;
+  }
+#endif
 
   return JNI_OK;
 }

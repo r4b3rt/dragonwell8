@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2002, 2018, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2002, 2022, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
@@ -19,7 +19,7 @@
 # Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
 # or visit www.oracle.com if you need additional information or have any
 # questions.
-#  
+#
 #
 
 # Define public interface.
@@ -33,6 +33,7 @@ SUNWprivate_1.1 {
 
                 # JVM
                 JVM_Accept;
+                JVM_DefineClassFromCDS;
                 JVM_ActiveProcessorCount;
                 JVM_AllocateNewArray;
                 JVM_AllocateNewObject;
@@ -95,7 +96,6 @@ SUNWprivate_1.1 {
                 JVM_ElasticHeapSetSoftmxPercent;
                 JVM_ElasticHeapGetSoftmxPercent;
                 JVM_ElasticHeapGetTotalUncommittedBytes;
-                JVM_Exit;
                 JVM_FillInStackTrace;
                 JVM_FindClassFromCaller;
                 JVM_FindClassFromClass;
@@ -222,6 +222,7 @@ SUNWprivate_1.1 {
                 JVM_NewInstanceFromConstructor;
                 JVM_NewMultiArray;
                 JVM_NotifyApplicationStartUpIsDone;
+                JVM_NotifyDump;
                 JVM_NotifyJVMDeoptWarmUpMethods;
                 JVM_OnExit;
                 JVM_Open;
@@ -302,4 +303,3 @@ SUNWprivate_1.1 {
         local:
                 *;
 };
-

@@ -192,7 +192,7 @@ class ConstantPoolCacheEntry VALUE_OBJ_CLASS_SPEC {
     field_index_mask           = right_n_bits(field_index_bits),
     parameter_size_bits        = 8,  // subset of field_index_mask, range is 0..255
     parameter_size_mask        = right_n_bits(parameter_size_bits),
-    option_bits_mask           = ~(((-1) << tos_state_shift) | (field_index_mask | parameter_size_mask))
+    option_bits_mask           = ~(((~0u) << tos_state_shift) | (field_index_mask | parameter_size_mask))
   };
 
   // specific bit definitions for the indices field:
@@ -212,6 +212,10 @@ class ConstantPoolCacheEntry VALUE_OBJ_CLASS_SPEC {
     assert(_f2 == 0, "set once");  // note: ref_index might be zero also
     _f2 = ref_index;
   }
+
+  // CDS support
+  void verify_just_initialized(bool f2_used);
+  void reinitialize(bool f2_used);
 
   void set_field(                                // sets entry to resolved field state
     Bytecodes::Code get_code,                    // the bytecode used for reading the field
@@ -479,6 +483,12 @@ class ConstantPoolCache: public MetaspaceObj {
   bool check_no_old_or_obsolete_entries();
   void dump_cache();
 #endif // INCLUDE_JVMTI
+
+#if INCLUDE_CDS
+  void remove_unshareable_info();
+  void verify_just_initialized();
+  void walk_entries_for_initialization(bool check_only);
+#endif // INCLUDE_CDS
 
   // Deallocate - no fields to deallocate
   DEBUG_ONLY(bool on_stack() { return false; })

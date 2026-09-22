@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -44,6 +44,9 @@ import sun.security.util.Debug;
  */
 class JarVerifier {
 
+    public static final String MULTIPLE_MANIFEST_WARNING =
+            "WARNING: Multiple MANIFEST.MF found. Treat JAR file as unsigned.";
+
     /* Are we debugging ? */
     static final Debug debug = Debug.getInstance("jar");
 
@@ -63,7 +66,7 @@ class JarVerifier {
     private ArrayList<SignatureFileVerifier> pendingBlocks;
 
     /* cache of CodeSigner objects */
-    private ArrayList<CodeSigner[]> signerCache;
+    private List<CodeSigner[]> signerCache;
 
     /* Are we parsing a block? */
     private boolean parsingBlockOrSF = false;
@@ -96,6 +99,10 @@ class JarVerifier {
     /** collect -DIGEST-MANIFEST values for blacklist */
     private List<Object> manifestDigests;
 
+    /* A cache mapping code signers to the algorithms used to digest jar
+       entries, and whether or not the algorithms are permitted. */
+    private Map<CodeSigner[], Map<String, Boolean>> signersToAlgs;
+
     public JarVerifier(String name, byte rawBytes[]) {
         manifestName = name;
         manifestRawBytes = rawBytes;
@@ -105,6 +112,7 @@ class JarVerifier {
         pendingBlocks = new ArrayList<>();
         baos = new ByteArrayOutputStream();
         manifestDigests = new ArrayList<>();
+        signersToAlgs = new HashMap<>();
     }
 
     /**
@@ -244,7 +252,8 @@ class JarVerifier {
         if (!parsingBlockOrSF) {
             JarEntry je = mev.getEntry();
             if ((je != null) && (je.signers == null)) {
-                je.signers = mev.verify(verifiedSigners, sigFileSigners);
+                je.signers = mev.verify(verifiedSigners, sigFileSigners,
+                                        signersToAlgs);
                 je.certs = mapSignersToCertArray(je.signers);
             }
         } else {
@@ -288,7 +297,7 @@ class JarVerifier {
                 String key = uname.substring(0, uname.lastIndexOf("."));
 
                 if (signerCache == null)
-                    signerCache = new ArrayList<>();
+                    signerCache = new LinkedList<>();
 
                 if (manDig == null) {
                     synchronized(manifestRawBytes) {

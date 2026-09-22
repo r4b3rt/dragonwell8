@@ -30,6 +30,10 @@
 package java.math;
 
 import static java.math.BigInteger.LONG_MASK;
+import java.io.InvalidObjectException;
+import java.io.ObjectInputStream;
+import java.io.ObjectStreamException;
+import java.io.StreamCorruptedException;
 import java.util.Arrays;
 
 /**
@@ -345,6 +349,18 @@ public class BigDecimal extends Number implements Comparable<BigDecimal> {
      */
     public static final BigDecimal TEN =
         zeroThroughTen[10];
+
+    private static boolean opt = false;
+    static {
+        try {
+            opt = Boolean.parseBoolean(System.getProperty("java.math.BigDecimal.optimization"));
+        } catch (SecurityException e) {
+            // When user define some secure environment(like Bug6937951Test.java),
+            // system property here may be inaccessible. So we'd better be conservative
+            // and turn off optimization.
+            opt = false;
+        }
+    }
 
     // Constructors
 
@@ -976,6 +992,15 @@ public class BigDecimal extends Number implements Comparable<BigDecimal> {
     }
 
     /**
+     * Accept no subclasses.
+     */
+    private static BigInteger toStrictBigInteger(BigInteger val) {
+        return (val.getClass() == BigInteger.class) ?
+            val :
+            new BigInteger(val.toByteArray().clone());
+    }
+
+    /**
      * Translates a {@code BigInteger} into a {@code BigDecimal}.
      * The scale of the {@code BigDecimal} is zero.
      *
@@ -984,8 +1009,8 @@ public class BigDecimal extends Number implements Comparable<BigDecimal> {
      */
     public BigDecimal(BigInteger val) {
         scale = 0;
-        intVal = val;
-        intCompact = compactValFor(val);
+        intVal = toStrictBigInteger(val);
+        intCompact = compactValFor(intVal);
     }
 
     /**
@@ -1001,7 +1026,7 @@ public class BigDecimal extends Number implements Comparable<BigDecimal> {
      * @since  1.5
      */
     public BigDecimal(BigInteger val, MathContext mc) {
-        this(val,0,mc);
+        this(toStrictBigInteger(val), 0, mc);
     }
 
     /**
@@ -1015,8 +1040,8 @@ public class BigDecimal extends Number implements Comparable<BigDecimal> {
      */
     public BigDecimal(BigInteger unscaledVal, int scale) {
         // Negative scales are now allowed
-        this.intVal = unscaledVal;
-        this.intCompact = compactValFor(unscaledVal);
+        this.intVal = toStrictBigInteger(unscaledVal);
+        this.intCompact = compactValFor(this.intVal);
         this.scale = scale;
     }
 
@@ -1036,6 +1061,7 @@ public class BigDecimal extends Number implements Comparable<BigDecimal> {
      * @since  1.5
      */
     public BigDecimal(BigInteger unscaledVal, int scale, MathContext mc) {
+        unscaledVal = toStrictBigInteger(unscaledVal);
         long compactVal = compactValFor(unscaledVal);
         int mcp = mc.precision;
         int prec = 0;
@@ -3747,6 +3773,7 @@ public class BigDecimal extends Number implements Comparable<BigDecimal> {
         private static final sun.misc.Unsafe unsafe;
         private static final long intCompactOffset;
         private static final long intValOffset;
+        private static final long scaleOffset;
         static {
             try {
                 unsafe = sun.misc.Unsafe.getUnsafe();
@@ -3754,12 +3781,17 @@ public class BigDecimal extends Number implements Comparable<BigDecimal> {
                     (BigDecimal.class.getDeclaredField("intCompact"));
                 intValOffset = unsafe.objectFieldOffset
                     (BigDecimal.class.getDeclaredField("intVal"));
+                scaleOffset = unsafe.objectFieldOffset
+                    (BigDecimal.class.getDeclaredField("scale"));
             } catch (Exception ex) {
                 throw new ExceptionInInitializerError(ex);
             }
         }
-        static void setIntCompactVolatile(BigDecimal bd, long val) {
-            unsafe.putLongVolatile(bd, intCompactOffset, val);
+
+        static void setIntValAndScaleVolatile(BigDecimal bd, BigInteger intVal, int scale) {
+            unsafe.putObjectVolatile(bd, intValOffset, intVal);
+            unsafe.putIntVolatile(bd, scaleOffset, scale);
+            unsafe.putLongVolatile(bd, intCompactOffset, compactValFor(intVal));
         }
 
         static void setIntValVolatile(BigDecimal bd, BigInteger val) {
@@ -3775,15 +3807,29 @@ public class BigDecimal extends Number implements Comparable<BigDecimal> {
      */
     private void readObject(java.io.ObjectInputStream s)
         throws java.io.IOException, ClassNotFoundException {
-        // Read in all fields
-        s.defaultReadObject();
-        // validate possibly bad fields
-        if (intVal == null) {
-            String message = "BigDecimal: null intVal in stream";
-            throw new java.io.StreamCorruptedException(message);
-        // [all values of scale are now allowed]
+        // prepare to read the fields
+        ObjectInputStream.GetField fields = s.readFields();
+        BigInteger serialIntVal = (BigInteger) fields.get("intVal", null);
+
+        // Validate field data
+        if (serialIntVal == null) {
+            throw new StreamCorruptedException("Null or missing intVal in BigDecimal stream");
         }
-        UnsafeHolder.setIntCompactVolatile(this, compactValFor(intVal));
+        // Validate provenance of serialIntVal object
+        serialIntVal = toStrictBigInteger(serialIntVal);
+
+        // Any integer value is valid for scale
+        int serialScale = fields.get("scale", 0);
+
+        UnsafeHolder.setIntValAndScaleVolatile(this, serialIntVal, serialScale);
+    }
+
+    /**
+     * Serialization without data not supported for this class.
+     */
+    private void readObjectNoData()
+        throws ObjectStreamException {
+        throw new InvalidObjectException("Deserialized BigDecimal objects need data");
     }
 
    /**
@@ -4389,6 +4435,38 @@ public class BigDecimal extends Number implements Comparable<BigDecimal> {
     /**
      * Remove insignificant trailing zeros from this
      * {@code BigInteger} value until the preferred scale is reached or no
+     * more zeros can be removed. This is a faster version of createAndStripZerosToMatchScale
+     * using binary search instead of linear search.
+     *
+     * @return new {@code BigDecimal} with a scale possibly reduced
+     * to be closed to the preferred scale.
+     */
+    private static BigDecimal createAndStripZerosToMatchScaleFast(BigInteger intVal, int scale, long preferredScale) {
+        BigInteger qr[]; // quotient-remainder pair
+        int scaleStep;
+        while (intVal.compareMagnitude(BigInteger.TEN) >= 0
+                && scale > preferredScale) {
+            scaleStep = checkScale(intVal, Math.max(((long) scale - preferredScale) / 2, 1l));
+            if (intVal.getLowestSetBit() >= scaleStep) { // intVal can be divided by pow(10, scaleStep) only if intVal has more trailing zeros than scaleStep
+                qr = intVal.divideAndRemainder(bigTenToThe(scaleStep));
+                if (qr[1].signum() == 0) {
+                    intVal = qr[0];
+                    scale = checkScale(intVal, (long) scale - scaleStep); // could Overflow
+                    continue;
+                }
+            }
+            if (scaleStep == 1) {
+                break;
+            } else {
+                preferredScale = scale - scaleStep;
+            }
+        }
+        return valueOf(intVal, scale, 0);
+    }
+
+    /**
+     * Remove insignificant trailing zeros from this
+     * {@code BigInteger} value until the preferred scale is reached or no
      * more zeros can be removed.  If the preferred scale is less than
      * Integer.MIN_VALUE, all the trailing zeros will be removed.
      *
@@ -4396,6 +4474,9 @@ public class BigDecimal extends Number implements Comparable<BigDecimal> {
      * to be closed to the preferred scale.
      */
     private static BigDecimal createAndStripZerosToMatchScale(BigInteger intVal, int scale, long preferredScale) {
+        if (opt && preferredScale >= Integer.MIN_VALUE) {
+            return createAndStripZerosToMatchScaleFast(intVal, scale, preferredScale);
+        }
         BigInteger qr[]; // quotient-remainder pair
         while (intVal.compareMagnitude(BigInteger.TEN) >= 0
                && scale > preferredScale) {

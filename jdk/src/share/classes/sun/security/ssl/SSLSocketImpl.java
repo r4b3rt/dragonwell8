@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -95,6 +95,11 @@ public final class SSLSocketImpl
      */
     private static final boolean trustNameService =
             Utilities.getBooleanProperty("jdk.tls.trustNameService", false);
+
+    /*
+     * Default timeout to skip bytes from the open socket
+     */
+    private static final int DEFAULT_SKIP_TIMEOUT = 1;
 
     /**
      * Package-private constructor used to instantiate an unconnected
@@ -610,8 +615,12 @@ public final class SSLSocketImpl
             if (!conContext.protocolVersion.useTLS13PlusSpec()) {
                 hasCloseReceipt = true;
             } else {
-                // Use a user_canceled alert for TLS 1.3 duplex close.
-                useUserCanceled = true;
+                // Do not use user_canceled workaround if the other side has
+                // already half-closed the connection
+                if (!conContext.isInboundClosed()) {
+                    // Use a user_canceled alert for TLS 1.3 duplex close.
+                    useUserCanceled = true;
+                }
             }
         } else if (conContext.handshakeContext != null) {   // initial handshake
             // Use user_canceled alert regardless the protocol versions.
@@ -1423,11 +1432,11 @@ public final class SSLSocketImpl
      * wrapped.
      */
     private void tryKeyUpdate() throws IOException {
-        // Don't bother to kickstart if handshaking is in progress, or if the
-        // connection is not duplex-open.
+        // Don't bother to kickstart if handshaking is in progress, or if
+        // the write side of the connection is not open.  We allow a half-
+        // duplex write-only connection for key updates.
         if ((conContext.handshakeContext == null) &&
                 !conContext.isOutboundClosed() &&
-                !conContext.isInboundClosed() &&
                 !conContext.isBroken) {
             if (SSLLogger.isOn && SSLLogger.isOn("ssl")) {
                 SSLLogger.finest("trigger key update");
@@ -1635,9 +1644,23 @@ public final class SSLSocketImpl
             if (conContext.inputRecord instanceof
                     SSLSocketInputRecord && isConnected) {
                 if (appInput.readLock.tryLock()) {
+                    int soTimeout = getSoTimeout();
                     try {
+                        // deplete could hang on the skip operation
+                        // in case of infinite socket read timeout.
+                        // Change read timeout to avoid deadlock.
+                        // This workaround could be replaced later
+                        // with the right synchronization
+                        if (soTimeout == 0) {
+                            setSoTimeout(DEFAULT_SKIP_TIMEOUT);
+                        }
                         ((SSLSocketInputRecord) (conContext.inputRecord)).deplete(false);
+                    } catch (java.net.SocketTimeoutException stEx) {
+                        // skip timeout exception during deplete
                     } finally {
+                        if (soTimeout == 0) {
+                            setSoTimeout(soTimeout);
+                        }
                         appInput.readLock.unlock();
                     }
                 }

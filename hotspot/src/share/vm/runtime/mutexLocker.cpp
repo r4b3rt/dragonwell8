@@ -39,6 +39,7 @@
 
 Mutex*   Patching_lock                = NULL;
 Monitor* SystemDictionary_monitor_lock= NULL;
+Mutex*   DumpLoadedClassList_lock     = NULL;
 Mutex*   ProfileRecorder_lock         = NULL;
 Mutex*   PreloadClassChain_lock       = NULL;
 Mutex*   JitWarmUpPrint_lock          = NULL;
@@ -84,6 +85,7 @@ Mutex*   Shared_SATB_Q_lock           = NULL;
 Mutex*   DirtyCardQ_FL_lock           = NULL;
 Monitor* DirtyCardQ_CBL_mon           = NULL;
 Mutex*   Shared_DirtyCardQ_lock       = NULL;
+Mutex*   MonitoringSupport_lock       = NULL;
 Mutex*   ParGCRareEvent_lock          = NULL;
 Mutex*   EvacFailureStack_lock        = NULL;
 Mutex*   DerivedPointerTableGC_lock   = NULL;
@@ -250,6 +252,8 @@ void mutex_init() {
     def(StringDedupQueue_lock      , Monitor, leaf,        true );
     def(StringDedupTable_lock      , Mutex  , leaf,        true );
   }
+  def(MonitoringSupport_lock       , Mutex  , leaf,        true );      // used for serviceability monitoring support
+
   def(ParGCRareEvent_lock          , Mutex  , leaf     ,   true );
   def(DerivedPointerTableGC_lock   , Mutex,   leaf,        true );
   def(CodeCache_lock               , Mutex  , special,     true );
@@ -263,6 +267,7 @@ void mutex_init() {
   def(JmethodIdCreation_lock       , Mutex  , leaf,        true ); // used for creating jmethodIDs.
 
   def(SystemDictionary_monitor_lock, Monitor, leaf,        true ); // lookups done by VM thread
+  def(DumpLoadedClassList_lock     , Mutex,   leaf,        true ); // lookups done by VM thread
   def(ProfileRecorder_lock         , Mutex  , nonleaf+2,   true ); // used for JitWarmUp
   def(PreloadClassChain_lock       , Mutex  , max_nonleaf, true ); // used for JitWarmUp
   def(JitWarmUpPrint_lock          , Mutex  , max_nonleaf, true ); // used for JitWarmUp

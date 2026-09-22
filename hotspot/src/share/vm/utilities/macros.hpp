@@ -34,6 +34,9 @@
 // Makes a string of the macro expansion of a
 #define XSTR(a) STR(a)
 
+// Allow commas in macro arguments.
+#define COMMA ,
+
 // -DINCLUDE_<something>=0 | 1 can be specified on the command line to include
 // or exclude functionality.
 
@@ -168,6 +171,17 @@
 #define JFR_ONLY(code) code
 #else
 #define JFR_ONLY(code)
+#endif
+
+// Alibaba AI-Extension
+#ifndef INCLUDE_AIEXT
+#define INCLUDE_AIEXT 0
+#endif
+
+#if INCLUDE_AIEXT
+#define AIEXT_ONLY(code) code
+#else
+#define AIEXT_ONLY(code)
 #endif
 
 // COMPILER1 variant

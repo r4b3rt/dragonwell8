@@ -122,12 +122,6 @@ java/awt/FontMetrics/MaxAdvanceIsMax.java             solaris-all,macosx-all
 
 # jdk_beans
 
-# 8060027
-java/beans/XMLEncoder/Test4903007.java                        generic-all
-java/beans/XMLEncoder/java_awt_GridBagLayout.java             generic-all
-java/beans/XMLDecoder/8028054/TestConstructorFinder.java      generic-all
-java/beans/XMLDecoder/8028054/TestMethodFinder.java           generic-all
-
 ############################################################################
 
 # jdk_lang
@@ -208,6 +202,9 @@ sun/net/www/http/HttpClient/B8025710.java			generic-all
 # 8169774
 java/io/File/WinSpecialFiles.java                               windows-all
 
+# 8274122
+java/io/File/createTempFile/SpecialTempFile.java                windows11
+
 ############################################################################
 
 # jdk_nio
@@ -280,8 +277,6 @@ sun/rmi/transport/tcp/DisableRMIOverHttp/DisableRMIOverHTTPTest.java    windows-
 
 # jdk_security
 
-# 8026976
-sun/security/pkcs11/ec/TestKeyFactory.java                      generic-all
 # 8180837
 sun/security/pkcs11/Secmod/AddTrustedCert.java                  generic-all
 sun/security/pkcs11/tls/TestKeyMaterial.java                    generic-all
@@ -323,9 +318,9 @@ com/sun/crypto/provider/CICO/PBEFunc/CICOPBEFuncTest.java       solaris-sparcv9
 # 8206912
 sun/security/krb5/auto/ReplayCacheTestProc.java                 solaris-sparcv9
 
-security/infra/java/security/cert/CertPathValidator/certification/ActalisCA.java  8224768 generic-all
-
 sun/security/mscapi/SignedObjectChain.java                      8176183 windows-all
+
+javax/security/auth/callback/PasswordCallback/CheckCleanerBound.java 8285785,8286045,8287596 generic-all
 
 ############################################################################
 
@@ -337,9 +332,6 @@ javax/sound/sampled/DataLine/LongFramePosition.java    8055097 generic-all
 javax/sound/sampled/Clip/Drain/ClipDrain.java          7062792 generic-all
 
 javax/sound/sampled/Mixers/DisabledAssertionCrash.java 7067310 generic-all
-
-# 8059743
-javax/sound/midi/Gervill/SoftProvider/GetDevice.java            generic-all
 
 ############################################################################
 
@@ -364,6 +356,8 @@ tools/launcher/FXLauncherTest.java                     windows-all,linux-all
 
 # jdk_jdi
 
+# 6951287
+com/sun/jdi/PopAndInvokeTest.java                                generic-all
 ############################################################################
 
 # jdk_util
@@ -395,15 +389,6 @@ sample/chatserver/ChatTest.java					8178912 generic-all
 ############################################################################
 
 com/sun/jdi/RedefineCrossEvent.java generic-all
-com/sun/jndi/ldap/LdapTimeoutTest.java generic-all
-com/sun/management/DiagnosticCommandMBean/DcmdMBeanPermissionsTest.java generic-all
-java/lang/invoke/MethodHandles/CatchExceptionTest.java generic-all
-java/net/Inet4Address/LookUpAllAddrsTest.sh generic-all
-java/security/KeyPairGenerator/FinalizeHalf.java generic-all
-java/security/Security/SynchronizedAccess.java generic-all
-java/text/BreakIterator/BreakIteratorTest.java generic-all
-java/util/stream/boottest/java/util/stream/SpinedBufferTest.java generic-all
-jdk/asm/AsmSanity.java generic-all
 jdk/net/rsocket/Exceptions.java generic-all
 jdk/net/rsocket/NullBind.java generic-all
 jdk/net/rsocket/RsocketTest.java generic-all
@@ -427,12 +412,103 @@ jdk/net/rsocket/SocketChannel/VectorIO.java generic-all
 jdk/net/rsocket/Socket/GetLocalAddress.java generic-all
 jdk/net/rsocket/SocketOption/OptionsTest.java generic-all
 jdk/net/rsocket/SocketOption/UnsupportedOptionsTest.java generic-all
-sun/net/www/http/ChunkedOutputStream/checkError.java generic-all
-sun/security/krb5/auto/ReplayCacheTestProc.java generic-all
-sun/security/krb5/auto/ReplayCacheTestProc.java generic-all
+java/util/Currency/ValidateISO4217.java https://bugs.openjdk.org/browse/JDK-8321480 generic-all
+com/alibaba/wisp/bug/TestThreadStackTrace.sh generic-all
+com/alibaba/wisp/bug/WispSocketLeakWhenConnectTimeoutTest.java generic-all
+com/alibaba/wisp2/Wisp2StackSizeTest.java generic-all
+com/alibaba/wisp2/Wisp2WorkStealTest.java generic-all
+com/alibaba/wisp/monitor/PassTokenTest.java generic-all
+com/alibaba/wisp/bug/WispSelectorReadyOpsTest.java generic-all
+com/alibaba/wisp2/NmtTracingWispTaskRecycleTest.java generic-all
+com/alibaba/wisp2/WispControlGroupCpuTest.java generic-all
+com/alibaba/wisp/ExecutionTest.java https://github.com/dragonwell-project/dragonwell8/issues/371 generic-all
+com/alibaba/wisp/IoTest.java https://github.com/dragonwell-project/dragonwell8/issues/371 generic-all
+com/alibaba/wisp/io/GlobalPollerTest.java https://github.com/dragonwell-project/dragonwell8/issues/371 generic-all
+com/alibaba/wisp2/CarrierAsPollerTest.java https://github.com/dragonwell-project/dragonwell8/issues/371 generic-all
+com/alibaba/wisp2/Wisp2TimerRemoveTest.java https://github.com/dragonwell-project/dragonwell8/issues/360 generic-all
+com/alibaba/wisp/thread/PreemptTest.java https://github.com/dragonwell-project/dragonwell8/issues/388 generic-all
+com/alibaba/wisp2/yield/YieldFewNanosTest.java https://github.com/dragonwell-project/dragonwell8/issues/378 generic-all
+
+# certificate problem, the upstream is also wrong
+
+############################################################################
+
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#certignarootca generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#globalsigneccrootcar4 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#gtsrootcar1 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#gtsrootcar2 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#gtsrootecccar3 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#gtsrootecccar4 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#actalisauthenticationrootca generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#amazonrootca1 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#amazonrootca2 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#amazonrootca3 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#amazonrootca4 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#buypassclass2ca generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#buypassclass3ca generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#certainlyroote1 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#certainlyrootr1 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#comodoeccca generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#comodorsaca generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#digicerttlseccrootg5 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#digicerttlsrsarootg5 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#emsigneccrootcag3 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#emsignrootcag1 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#entrustrootcaec1 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#entrustrootcag4 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#godaddyrootg2ca generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#letsencryptisrgx1 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#letsencryptisrgx2 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#microsoftecc2017 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#microsoftrsa2017 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#quovadisrootca1g3 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#quovadisrootca2g3 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#quovadisrootca3g3 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#sslrooteccca generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#sslrootevrsaca generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#sslrootrsaca generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#starfieldrootg2ca generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#teliarootcav2 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#teliasonerarootcav1 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#twcaglobalrootca generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#usertrusteccca generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#usertrustrsaca generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#globalsignrootcar6 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#ssltlsrootrsa2022 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#ssltlsrootecc2022 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/DigicertCSRootG5.java generic-all
+security/infra/java/security/cert/CertPathValidator/certification/EmSignRootG2CA.java generic-all
+security/infra/java/security/cert/CertPathValidator/certification/LuxTrustCA.java generic-all
 sun/security/lib/cacerts/VerifyCACerts.java generic-all
-sun/security/pkcs11/Secmod/TestNssDbSqlite.java generic-all
-sun/security/ssl/X509TrustManagerImpl/Symantec/Distrust.java generic-all
-sun/tools/jstatd/TestJstatdExternalRegistry.java generic-all
-sun/tools/jstatd/TestJstatdPortAndServer.java generic-all
-sun/tools/jstatd/TestJstatdPort.java generic-all
+
+# resource limit
+
+############################################################################
+
+java/util/WeakHashMap/GCDuringIteration.java
+java/util/zip/3GBZipFiles.sh generic-all
+java/util/ResourceBundle/Test4300693.java generic-all
+java/util/ResourceBundle/RestrictedBundleTest.java generic-all
+java/lang/invoke/LFCaching/LFGarbageCollectedTest.java generic-all
+java/util/AbstractList/CheckForComodification.java generic-all
+java/lang/StringBuilder/HugeCapacity.java generic-all
+
+############################################################################
+
+# china mainland network
+
+############################################################################
+
+security/infra/java/security/cert/CertPathValidator/certification/CertignaCA.java generic-all
+############################################################################
+
+# cacerts tests
+
+############################################################################
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#actalisauthenticationrootca    8366176 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#certignarootca         8331883 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#entrustrootcag4        8367256 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#teliasonerarootcav1    8333640 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#teliarootcav2          8380376 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#microsoftrsa2017       8374886 generic-all
+security/infra/java/security/cert/CertPathValidator/certification/LuxTrustCA.java                       8314509 generic-all

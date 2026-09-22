@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2007, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -59,6 +59,7 @@ public class VersionCheck extends TestHelper {
 
     // tools that do not accept -version
     static final String[] BLACKLIST_VERSION = {
+        "jgroup",
         "appletviewer",
         "controlpanel",
         "clhsdb",
@@ -247,8 +248,7 @@ public class VersionCheck extends TestHelper {
             if (isWindows && !name.endsWith(EXE_FILE_EXT)) {
                 return false;
             }
-            // jgroup requires special permission
-            if (pathname.getName().equals("jgroup")) {
+            if (name.endsWith(NIX_DBGINFO_EXT)) {
                 return false;
             }
             for (String x : exclude) {

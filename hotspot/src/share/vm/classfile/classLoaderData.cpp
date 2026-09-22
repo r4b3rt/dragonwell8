@@ -59,11 +59,17 @@
 #include "memory/oopFactory.hpp"
 #include "runtime/jniHandles.hpp"
 #include "runtime/mutex.hpp"
+#include "runtime/orderAccess.hpp"
 #include "runtime/safepoint.hpp"
 #include "runtime/synchronizer.hpp"
 #include "utilities/growableArray.hpp"
 #include "utilities/macros.hpp"
 #include "utilities/ostream.hpp"
+
+// helper function to avoid in-line casts
+template <typename T> static T* load_ptr_acquire(T* volatile *p) {
+  return static_cast<T*>(OrderAccess::load_ptr_acquire(p));
+}
 
 ClassLoaderData * ClassLoaderData::_the_null_class_loader_data = NULL;
 
@@ -159,7 +165,8 @@ void ClassLoaderData::Dependencies::oops_do(OopClosure* f) {
 }
 
 void ClassLoaderData::classes_do(KlassClosure* klass_closure) {
-  for (Klass* k = _klasses; k != NULL; k = k->next_link()) {
+  // Lock-free access requires load_ptr_acquire
+  for (Klass* k = load_ptr_acquire(&_klasses); k != NULL; k = k->next_link()) {
     klass_closure->do_klass(k);
     assert(k != k->next_link(), "no loops!");
   }
@@ -183,7 +190,8 @@ void ClassLoaderData::loaded_classes_do(KlassClosure* klass_closure) {
 }
 
 void ClassLoaderData::classes_do(void f(InstanceKlass*)) {
-  for (Klass* k = _klasses; k != NULL; k = k->next_link()) {
+  // Lock-free access requires load_ptr_acquire
+  for (Klass* k = load_ptr_acquire(&_klasses); k != NULL; k = k->next_link()) {
     if (k->oop_is_instance()) {
       f(InstanceKlass::cast(k));
     }
@@ -302,8 +310,9 @@ void ClassLoaderData::add_class(Klass* k) {
   MutexLockerEx ml(metaspace_lock(),  Mutex::_no_safepoint_check_flag);
   Klass* old_value = _klasses;
   k->set_next_link(old_value);
-  // link the new item into the list
-  _klasses = k;
+  // Link the new item into the list, making sure the linked class is stable
+  // since the list can be walked without a lock
+  OrderAccess::release_store_ptr(&_klasses, k);
 
   if (TraceClassLoaderData && Verbose && k->class_loader_data() != NULL) {
     ResourceMark rm;
@@ -406,36 +415,49 @@ bool ClassLoaderData::is_ext_class_loader_data() const {
   return SystemDictionary::is_ext_class_loader(class_loader());
 }
 
+bool ClassLoaderData::is_builtin_class_loader_data() const {
+  return (class_loader() == NULL ||
+          SystemDictionary::is_system_class_loader(class_loader()) ||
+          is_ext_class_loader_data());
+}
+
+bool ClassLoaderData::is_system_class_loader_data() const {
+  return SystemDictionary::is_system_class_loader(class_loader());
+}
+
 Metaspace* ClassLoaderData::metaspace_non_null() {
   assert(!DumpSharedSpaces, "wrong metaspace!");
   // If the metaspace has not been allocated, create a new one.  Might want
   // to create smaller arena for Reflection class loaders also.
   // The reason for the delayed allocation is because some class loaders are
   // simply for delegating with no metadata of their own.
-  if (_metaspace == NULL) {
+  // Lock-free access requires load_acquire.
+  Metaspace* metaspace = (Metaspace*) OrderAccess::load_ptr_acquire(&_metaspace);
+  if (metaspace == NULL) {
     MutexLockerEx ml(metaspace_lock(),  Mutex::_no_safepoint_check_flag);
     // Check again if metaspace has been allocated while we were getting this lock.
-    if (_metaspace != NULL) {
-      return _metaspace;
-    }
-    if (this == the_null_class_loader_data()) {
-      assert (class_loader() == NULL, "Must be");
-      set_metaspace(new Metaspace(_metaspace_lock, Metaspace::BootMetaspaceType));
-    } else if (is_anonymous()) {
-      if (TraceClassLoaderData && Verbose && class_loader() != NULL) {
-        tty->print_cr("is_anonymous: %s", class_loader()->klass()->internal_name());
+    if ((metaspace = _metaspace) == NULL) {
+      if (this == the_null_class_loader_data()) {
+        assert(class_loader() == NULL, "Must be");
+        metaspace = new Metaspace(_metaspace_lock, Metaspace::BootMetaspaceType);
+      } else if (is_anonymous()) {
+        if (TraceClassLoaderData && Verbose && class_loader() != NULL) {
+          tty->print_cr("is_anonymous: %s", class_loader()->klass()->internal_name());
+        }
+        metaspace = new Metaspace(_metaspace_lock, Metaspace::AnonymousMetaspaceType);
+      } else if (class_loader()->is_a(SystemDictionary::reflect_DelegatingClassLoader_klass())) {
+        if (TraceClassLoaderData && Verbose && class_loader() != NULL) {
+          tty->print_cr("is_reflection: %s", class_loader()->klass()->internal_name());
+        }
+        metaspace = new Metaspace(_metaspace_lock, Metaspace::ReflectionMetaspaceType);
+      } else {
+        metaspace = new Metaspace(_metaspace_lock, Metaspace::StandardMetaspaceType);
       }
-      set_metaspace(new Metaspace(_metaspace_lock, Metaspace::AnonymousMetaspaceType));
-    } else if (class_loader()->is_a(SystemDictionary::reflect_DelegatingClassLoader_klass())) {
-      if (TraceClassLoaderData && Verbose && class_loader() != NULL) {
-        tty->print_cr("is_reflection: %s", class_loader()->klass()->internal_name());
-      }
-      set_metaspace(new Metaspace(_metaspace_lock, Metaspace::ReflectionMetaspaceType));
-    } else {
-      set_metaspace(new Metaspace(_metaspace_lock, Metaspace::StandardMetaspaceType));
+      // Ensure _metaspace is stable, since it is examined without a lock
+      OrderAccess::release_store_ptr(&_metaspace, metaspace);
     }
   }
-  return _metaspace;
+  return metaspace;
 }
 
 jobject ClassLoaderData::add_handle(Handle h) {
@@ -486,7 +508,8 @@ void ClassLoaderData::free_deallocate_list() {
 // These anonymous class loaders are to contain classes used for JSR292
 ClassLoaderData* ClassLoaderData::anonymous_class_loader_data(oop loader, TRAPS) {
   // Add a new class loader data to the graph.
-  return ClassLoaderDataGraph::add(loader, true, THREAD);
+  bool created_by_current_thread = false;
+  return ClassLoaderDataGraph::add(loader, true, created_by_current_thread, THREAD);
 }
 
 const char* ClassLoaderData::loader_name() {
@@ -552,7 +575,8 @@ void ClassLoaderData::verify() {
 }
 
 bool ClassLoaderData::contains_klass(Klass* klass) {
-  for (Klass* k = _klasses; k != NULL; k = k->next_link()) {
+  // Lock-free access requires load_ptr_acquire
+  for (Klass* k = load_ptr_acquire(&_klasses); k != NULL; k = k->next_link()) {
     if (k == klass) return true;
   }
   return false;
@@ -569,7 +593,7 @@ bool ClassLoaderDataGraph::_should_purge = false;
 
 // Add a new class loader data node to the list.  Assign the newly created
 // ClassLoaderData into the java/lang/ClassLoader object as a hidden field
-ClassLoaderData* ClassLoaderDataGraph::add(Handle loader, bool is_anonymous, TRAPS) {
+ClassLoaderData* ClassLoaderDataGraph::add(Handle loader, bool is_anonymous, bool& is_created, TRAPS) {
   // We need to allocate all the oops for the ClassLoaderData before allocating the
   // actual ClassLoaderData object.
   ClassLoaderData::Dependencies dependencies(CHECK_NULL);
@@ -590,6 +614,7 @@ ClassLoaderData* ClassLoaderDataGraph::add(Handle loader, bool is_anonymous, TRA
       // Returns the data.
       return old;
     }
+    is_created = true;
   }
 
   // We won the race, and therefore the task of adding the data to the list of

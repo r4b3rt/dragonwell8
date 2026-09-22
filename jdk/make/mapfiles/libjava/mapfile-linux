@@ -278,7 +278,8 @@ SUNWprivate_1.1 {
                 Java_sun_misc_VM_initialize;
 		Java_sun_misc_VMSupport_initAgentProperties;
 		Java_sun_misc_VMSupport_getVMTemporaryDirectory;
-		Java_jdk_internal_platform_cgroupv1_Metrics_isUseContainerSupport;
+		Java_jdk_internal_platform_CgroupMetrics_isUseContainerSupport;
+		Java_jdk_internal_platform_CgroupMetrics_getTotalMemorySize0;
 
                 # ZipFile.c needs this one
 		throwFileNotFoundException;
@@ -309,6 +310,7 @@ SUNWprivate_1.1 {
     Java_com_alibaba_wisp_engine_WispSysmon_registerNatives;
     Java_com_alibaba_wisp_engine_WispTask_registerNatives;
     Java_java_dyn_Coroutine_registerNatives;
+	Java_com_alibaba_util_QuickStart_registerNatives;
 
 	local:
 		*;

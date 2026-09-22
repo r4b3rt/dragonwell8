@@ -553,14 +553,7 @@ class Address VALUE_OBJ_CLASS_SPEC {
 
   void lea(MacroAssembler *, Register) const;
 
-  static bool offset_ok_for_immed(long offset, int shift = 0) {
-    unsigned mask = (1 << shift) - 1;
-    if (offset < 0 || offset & mask) {
-      return (uabs(offset) < (1 << (20 - 12))); // Unscaled offset
-    } else {
-      return ((offset >> shift) < (1 << (21 - 10 + 1))); // Scaled, unsigned offset
-    }
-  }
+  static bool offset_ok_for_immed(int64_t offset, uint shift = 0);
 };
 
 // Convience classes
@@ -832,7 +825,7 @@ public:
   static const unsigned long branch_range = NOT_DEBUG(128 * M) DEBUG_ONLY(2 * M);
 
   static bool reachable_from_branch_at(address branch, address target) {
-    return uabs(target - branch) < branch_range;
+    return g_uabs(target - branch) < branch_range;
   }
 
   // Unconditional branch (immediate)

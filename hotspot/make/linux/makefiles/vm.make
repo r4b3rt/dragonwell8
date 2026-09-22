@@ -122,8 +122,8 @@ CFLAGS += $(CFLAGS_WARN/BYFILE)
 CFLAGS += $(CFLAGS/NOEX)
 
 # Extra flags from gnumake's invocation or environment
-CFLAGS += $(EXTRA_CFLAGS)
-LFLAGS += $(EXTRA_CFLAGS) $(EXTRA_LDFLAGS)
+CFLAGS += $(EXTRA_CXXFLAGS)
+LFLAGS += $(EXTRA_CXXFLAGS) $(EXTRA_LDFLAGS)
 ASFLAGS += $(EXTRA_ASFLAGS)
 
 # Don't set excutable bit on stack segment
@@ -210,6 +210,11 @@ Src_Files_EXCLUDE += \*x86_64\*
 endif
 ifeq ($(Platform_arch_model), x86_64)
 Src_Files_EXCLUDE += \*x86_32\*
+endif
+
+# Special handling of AI-Extension.
+ifneq ($(ENABLE_AIEXT),true)
+Src_Files_EXCLUDE += aiext.cpp aiExtension.cpp
 endif
 
 # Alternate vm.make

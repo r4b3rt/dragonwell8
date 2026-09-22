@@ -271,8 +271,13 @@ public class WhiteBox {
   // Container testing
   public native boolean isContainerized();
   public native void printOsInfo();
+  public native int validateCgroup(String procCgroups,
+                                   String procSelfCgroup,
+                                   String procSelfMountinfo);
 
   // TLAB
   public native boolean isInCurrentTLAB(Object obj);
 
+  // AI-Extension support
+  public native boolean isAIExtSupported();
 }

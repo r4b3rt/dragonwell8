@@ -46,6 +46,10 @@
 #include "utilities/macros.hpp"
 #include "utilities/exceptions.hpp"
 
+#if INCLUDE_CDS
+#include "prims/cdsoffsets.hpp"
+#endif // INCLUDE_CDS
+
 #if INCLUDE_ALL_GCS
 #include "gc_implementation/parallelScavenge/parallelScavengeHeap.inline.hpp"
 #include "gc_implementation/g1/concurrentMark.hpp"
@@ -63,6 +67,11 @@
 #include "compiler/compileBroker.hpp"
 #include "jvmtifiles/jvmtiEnv.hpp"
 #include "runtime/compilationPolicy.hpp"
+
+#ifdef LINUX
+#include "osContainer_linux.hpp"
+#include "cgroupSubsystem_linux.hpp"
+#endif
 
 PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
 
@@ -163,7 +172,6 @@ WB_END
 
 #ifdef LINUX
 #include "utilities/elfFile.hpp"
-#include "osContainer_linux.hpp"
 #endif
 
 WB_ENTRY(jlong, WB_GetCompressedOopsMaxHeapSize(JNIEnv* env, jobject o)) {
@@ -584,6 +592,18 @@ WB_ENTRY(jboolean, WB_TestSetForceInlineMethod(JNIEnv* env, jobject o, jobject m
   mh->set_force_inline(value == JNI_TRUE);
   return result;
 WB_END
+
+#ifdef LINUX
+bool WhiteBox::validate_cgroup(const char* proc_cgroups,
+                               const char* proc_self_cgroup,
+                               const char* proc_self_mountinfo,
+                               u1* cg_flags) {
+  CgroupInfo cg_infos[4];
+  return CgroupSubsystemFactory::determine_type(cg_infos, proc_cgroups,
+                                                    proc_self_cgroup,
+                                                    proc_self_mountinfo, cg_flags);
+}
+#endif
 
 bool WhiteBox::compile_method(Method* method, int comp_level, int bci, Thread* THREAD) {
   // Screen for unavailable/bad comp level or null method
@@ -1211,6 +1231,31 @@ WB_ENTRY(jboolean, WB_IsContainerized(JNIEnv* env, jobject o))
   return false;
 WB_END
 
+WB_ENTRY(jint, WB_ValidateCgroup(JNIEnv* env,
+                                    jobject o,
+                                    jstring proc_cgroups,
+                                    jstring proc_self_cgroup,
+                                    jstring proc_self_mountinfo))
+  jint ret = 0;
+#ifdef LINUX
+  ThreadToNativeFromVM ttnfv(thread);
+  const char* p_cgroups = env->GetStringUTFChars(proc_cgroups, NULL);
+  CHECK_JNI_EXCEPTION_(env, 0);
+  const char* p_s_cgroup = env->GetStringUTFChars(proc_self_cgroup, NULL);
+  CHECK_JNI_EXCEPTION_(env, 0);
+  const char* p_s_mountinfo = env->GetStringUTFChars(proc_self_mountinfo, NULL);
+  CHECK_JNI_EXCEPTION_(env, 0);
+  u1 cg_type_flags = 0;
+  // This sets cg_type_flags
+  WhiteBox::validate_cgroup(p_cgroups, p_s_cgroup, p_s_mountinfo, &cg_type_flags);
+  ret = (jint)cg_type_flags;
+  env->ReleaseStringUTFChars(proc_cgroups, p_cgroups);
+  env->ReleaseStringUTFChars(proc_self_cgroup, p_s_cgroup);
+  env->ReleaseStringUTFChars(proc_self_mountinfo, p_s_mountinfo);
+#endif
+  return ret;
+WB_END
+
 WB_ENTRY(void, WB_PrintOsInfo(JNIEnv* env, jobject o))
   os::print_os_info(tty);
 WB_END
@@ -1508,6 +1553,23 @@ WB_ENTRY(jboolean, WB_IsInCurrentTLAB(JNIEnv* env, jobject wb, jobject o))
   return JNI_FALSE;
 WB_END
 
+#if INCLUDE_CDS
+WB_ENTRY(jint, WB_GetOffsetForName(JNIEnv* env, jobject o, jstring name))
+  ResourceMark rm;
+  char* c_name = java_lang_String::as_utf8_string(JNIHandles::resolve_non_null(name));
+  int result = CDSOffsets::find_offset(c_name);
+  return (jint)result;
+WB_END
+#endif // INCLUDE_CDS
+
+WB_ENTRY(jboolean, WB_IsAIExtSupported(JNIEnv* env))
+#if INCLUDE_AIEXT
+  return true;
+#else
+  return false;
+#endif // INCLUDE_AIEXT
+WB_END
+
 #define CC (char*)
 
 static JNINativeMethod methods[] = {
@@ -1539,6 +1601,9 @@ static JNINativeMethod methods[] = {
   {CC"readFromNoaccessArea",CC"()V",                  (void*)&WB_ReadFromNoaccessArea},
   {CC"stressVirtualSpaceResize",CC"(JJJ)I",           (void*)&WB_StressVirtualSpaceResize},
   {CC"isSharedClass", CC"(Ljava/lang/Class;)Z",       (void*)&WB_IsSharedClass },
+#if INCLUDE_CDS
+  {CC"getOffsetForName0", CC"(Ljava/lang/String;)I",  (void*)&WB_GetOffsetForName},
+#endif
 #if INCLUDE_ALL_GCS
   {CC"g1InConcurrentMark", CC"()Z",                   (void*)&WB_G1InConcurrentMark},
   {CC"g1IsHumongous",      CC"(Ljava/lang/Object;)Z", (void*)&WB_G1IsHumongous     },
@@ -1634,6 +1699,9 @@ static JNINativeMethod methods[] = {
   {CC"checkLibSpecifiesNoexecstack", CC"(Ljava/lang/String;)Z",
                                                       (void*)&WB_CheckLibSpecifiesNoexecstack},
   {CC"isContainerized",           CC"()Z",            (void*)&WB_IsContainerized },
+  {CC"validateCgroup",
+      CC"(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I",
+                                                      (void*)&WB_ValidateCgroup },
   {CC"printOsInfo",               CC"()V",            (void*)&WB_PrintOsInfo },
   {CC"getClassListFromLogfile", CC"()[Ljava/lang/String;",
                                                       (void*)&WB_GetClassListFromLogfile },
@@ -1652,6 +1720,7 @@ static JNINativeMethod methods[] = {
   {CC"isInCurrentTLAB",    CC"(Ljava/lang/Object;)Z", (void*)&WB_IsInCurrentTLAB },
   {CC"gcLockCritical",            CC"()V",            (void*)&WB_GCLockCritical},
   {CC"gcUnlockCritical",          CC"()V",            (void*)&WB_GCUnlockCritical},
+  {CC"isAIExtSupported", CC"()Z",                     (void*)&WB_IsAIExtSupported},
 };
 
 #undef CC

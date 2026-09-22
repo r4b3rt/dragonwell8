@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -84,10 +84,21 @@ public class SignerInfo implements DerEncoder {
     /**
      * A map containing the algorithms in this SignerInfo. This is used to
      * avoid checking algorithms to see if they are disabled more than once.
-     * The key is the AlgorithmId of the algorithm, and the value is the name of
-     * the field or attribute.
+     * The key is the AlgorithmId of the algorithm, and the value is a record
+     * containing the name of the field or attribute and whether the key
+     * should also be checked (ex: if it is a signature algorithm).
      */
-    private Map<AlgorithmId, String> algorithms = new HashMap<>();
+    private class AlgorithmInfo {
+        String field;
+        boolean checkKey;
+        private AlgorithmInfo(String f, boolean cK) {
+            field = f;
+            checkKey = cK;
+        }
+        String field() { return field; }
+        boolean checkKey() { return checkKey; }
+    }
+    private Map<AlgorithmId, AlgorithmInfo> algorithms = new HashMap<>();
 
     public SignerInfo(X500Name  issuerName,
                       BigInteger serial,
@@ -323,13 +334,29 @@ public class SignerInfo implements DerEncoder {
             }
 
             String digestAlgName = digestAlgorithmId.getName();
-            algorithms.put(digestAlgorithmId, "SignerInfo digestAlgorithm field");
+            algorithms.put(digestAlgorithmId,
+                new AlgorithmInfo("SignerInfo digestAlgorithm field", false));
 
             byte[] dataSigned;
 
             // if there are authenticate attributes, get the message
             // digest and compare it with the digest of data
             if (authenticatedAttributes == null) {
+                // RFC 5652 Section 5.3. "[signedAttrs] MUST be present if the
+                // content type of the EncapsulatedContentInfo value being
+                // signed is not id-data."
+                if (!content.getContentType().equals(ContentInfo.DATA_OID)) {
+                    throw new SignatureException("Missing authenticatedAttributes");
+                } else {
+                    try {
+                        DerValue c = new DerValue(data);
+                        if (c.tag == DerValue.tag_Set) {
+                            throw new SignatureException("Not a .SF file content");
+                        }
+                    } catch (IOException e) {
+                        // Expected or ignored
+                    }
+                }
                 dataSigned = data;
             } else {
 
@@ -382,7 +409,8 @@ public class SignerInfo implements DerEncoder {
                     new AlgorithmId(oid,
                             digestEncryptionAlgorithmId.getParameters());
                 algorithms.put(sigAlgId,
-                    "SignerInfo digestEncryptionAlgorithm field");
+                    new AlgorithmInfo(
+                        "SignerInfo digestEncryptionAlgorithm field", true));
             } catch (NoSuchAlgorithmException ignore) {
             }
 
@@ -538,6 +566,12 @@ public class SignerInfo implements DerEncoder {
             return null;
         }
 
+        // RFC 3161 Section 2.4.2. id-ct-TSTInfo.
+        if (!tsToken.getContentInfo().getContentType()
+                .equals(ContentInfo.TIMESTAMP_TOKEN_INFO_OID)) {
+            throw new SignatureException("Not using id-ct-TSTInfo");
+        }
+
         // Extract the content (an encoded timestamp token info)
         byte[] encTsTokenInfo = tsToken.getContentInfo().getData();
         // Extract the signer (the Timestamping Authority)
@@ -569,7 +603,8 @@ public class SignerInfo implements DerEncoder {
         throws NoSuchAlgorithmException, SignatureException {
 
         AlgorithmId digestAlgId = token.getHashAlgorithm();
-        algorithms.put(digestAlgId, "TimestampToken digestAlgorithm field");
+        algorithms.put(digestAlgId,
+            new AlgorithmInfo("TimestampToken digestAlgorithm field", false));
 
         MessageDigest md = MessageDigest.getInstance(digestAlgId.getName());
 
@@ -626,18 +661,19 @@ public class SignerInfo implements DerEncoder {
      */
     public static Set<String> verifyAlgorithms(SignerInfo[] infos,
         JarConstraintsParameters params, String name) throws SignatureException {
-        Map<AlgorithmId, String> algorithms = new HashMap<>();
+        Map<AlgorithmId, AlgorithmInfo> algorithms = new HashMap<>();
         for (SignerInfo info : infos) {
             algorithms.putAll(info.algorithms);
         }
 
         Set<String> enabledAlgorithms = new HashSet<>();
         try {
-            for (Map.Entry<AlgorithmId, String> algorithm : algorithms.entrySet()) {
-                params.setExtendedExceptionMsg(name, algorithm.getValue());
-                AlgorithmId algId = algorithm.getKey();
+            for (Map.Entry<AlgorithmId,AlgorithmInfo> algEntry : algorithms.entrySet()) {
+                AlgorithmInfo info = algEntry.getValue();
+                params.setExtendedExceptionMsg(name, info.field());
+                AlgorithmId algId = algEntry.getKey();
                 JAR_DISABLED_CHECK.permits(algId.getName(),
-                    algId.getParameters(), params);
+                    algId.getParameters(), params, info.checkKey());
                 enabledAlgorithms.add(algId.getName());
             }
         } catch (CertPathValidatorException e) {

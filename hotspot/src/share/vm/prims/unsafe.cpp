@@ -167,13 +167,20 @@ jint Unsafe_invocation_key_to_method_slot(jint key) {
 #define truncate_jfloat(x) (x)
 #define truncate_jdouble(x) (x)
 
+// Note that GET_FIELD and SET_FIELD cast the object field's C type to
+// volatile at the point of access. That is needed in order to ensure
+// that the C compiler does not reorder the object field access wrt to
+// preceding and succeeding volatile accesses to the thread flag field
+// (made by UnsafeWrapper) which safeguard the field access. See
+// JDK-8186787 for details.
+
 #define GET_FIELD(obj, offset, type_name, v) \
   oop p = JNIHandles::resolve(obj); \
-  type_name v = *(type_name*)index_oop_from_field_offset_long(p, offset)
+  type_name v = *(volatile type_name*)index_oop_from_field_offset_long(p, offset)
 
 #define SET_FIELD(obj, offset, type_name, x) \
   oop p = JNIHandles::resolve(obj); \
-  *(type_name*)index_oop_from_field_offset_long(p, offset) = truncate_##type_name(x)
+  *(volatile type_name*)index_oop_from_field_offset_long(p, offset) = truncate_##type_name(x)
 
 #define GET_FIELD_VOLATILE(obj, offset, type_name, v) \
   oop p = JNIHandles::resolve(obj); \
@@ -1864,27 +1871,29 @@ JNINativeMethod fence_methods[] = {
 #define STE "Ljava/lang/StackTraceElement;"
 
 JNINativeMethod coroutine_support_methods[] = {
-    {CC"switchTo",                CC"("COBA COBA")V", FN_PTR(CoroutineSupport_switchTo)},
-    {CC"switchToAndTerminate",    CC"("COBA COBA")V", FN_PTR(CoroutineSupport_switchToAndTerminate)},
-    {CC"switchToAndExit",         CC"("COBA COBA")V", FN_PTR(CoroutineSupport_switchToAndExit)},
-    {CC"getNativeThreadCoroutine",CC"()J",            FN_PTR(CoroutineSupport_getNativeThreadCoroutine)},
-    {CC"createCoroutine",         CC"("COBA"J)J",     FN_PTR(CoroutineSupport_createCoroutine)},
+    {CC"switchTo",                CC"(" COBA COBA ")V", FN_PTR(CoroutineSupport_switchTo)},
+    {CC"switchToAndTerminate",    CC"(" COBA COBA ")V", FN_PTR(CoroutineSupport_switchToAndTerminate)},
+    {CC"switchToAndExit",         CC"(" COBA COBA ")V", FN_PTR(CoroutineSupport_switchToAndExit)},
+    {CC"getNativeThreadCoroutine",CC"()J",              FN_PTR(CoroutineSupport_getNativeThreadCoroutine)},
+    {CC"createCoroutine",         CC"(" COBA "J)J",     FN_PTR(CoroutineSupport_createCoroutine)},
     {CC"testDisposableAndTryReleaseStack",
-                                  CC"(J)Z",           FN_PTR(CoroutineSupport_testDisposableAndTryReleaseStack)},
-    {CC"cleanupCoroutine",        CC"()"COBA,         FN_PTR(CoroutineSupport_cleanupCoroutine)},
-    {CC"setWispBooted",           CC"()V",            FN_PTR(CoroutineSupport_setWispBooted)},
-    {CC"stealCoroutine",          CC"(J)Z",           FN_PTR(CoroutineSupport_stealCoroutine)},
-    {CC"getNextCoroutine",        CC"(J)"COR,         FN_PTR(CoroutineSupport_getNextCoroutine)},
-    {CC"moveCoroutine",           CC"(JJ)V",          FN_PTR(CoroutineSupport_moveCoroutine)},
-    {CC"markThreadCoroutine",     CC"(J"COBA")V",     FN_PTR(CoroutineSupport_markThreadCoroutine)},
-    {CC"shouldThrowException0", CC"(J)Z",           FN_PTR(CoroutineSupport_shouldThrowException0)},
-    {CC"getCoroutineStack",       CC"(J)["STE,        FN_PTR(CoroutineSupport_getCoroutineStack)},
-    {CC"shouldThrowException0", CC"(J)Z",           FN_PTR(CoroutineSupport_shouldThrowException0)},
+                                  CC"(J)Z",             FN_PTR(CoroutineSupport_testDisposableAndTryReleaseStack)},
+    {CC"cleanupCoroutine",        CC"()" COBA,          FN_PTR(CoroutineSupport_cleanupCoroutine)},
+    {CC"setWispBooted",           CC"()V",              FN_PTR(CoroutineSupport_setWispBooted)},
+    {CC"stealCoroutine",          CC"(J)Z",             FN_PTR(CoroutineSupport_stealCoroutine)},
+    {CC"getNextCoroutine",        CC"(J)" COR,          FN_PTR(CoroutineSupport_getNextCoroutine)},
+    {CC"moveCoroutine",           CC"(JJ)V",            FN_PTR(CoroutineSupport_moveCoroutine)},
+    {CC"markThreadCoroutine",     CC"(J" COBA ")V",     FN_PTR(CoroutineSupport_markThreadCoroutine)},
+    {CC"shouldThrowException0",   CC"(J)Z",             FN_PTR(CoroutineSupport_shouldThrowException0)},
+    {CC"getCoroutineStack",       CC"(J)[" STE,         FN_PTR(CoroutineSupport_getCoroutineStack)},
+    {CC"shouldThrowException0",   CC"(J)Z",             FN_PTR(CoroutineSupport_shouldThrowException0)},
 };
 
 #define COMPILE_CORO_METHODS_BEFORE (3)
 
 #undef COBA
+#undef COR
+#undef STE
 
 #undef CC
 #undef FN_PTR

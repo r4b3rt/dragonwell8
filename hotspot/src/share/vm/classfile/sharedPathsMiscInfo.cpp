@@ -26,6 +26,7 @@
 #include "classfile/classLoader.hpp"
 #include "classfile/classLoaderData.inline.hpp"
 #include "classfile/sharedPathsMiscInfo.hpp"
+#include "classfile/sharedClassUtil.hpp"
 #include "memory/allocation.inline.hpp"
 #include "memory/metaspaceShared.hpp"
 #include "runtime/arguments.hpp"
@@ -111,7 +112,12 @@ bool SharedPathsMiscInfo::check(jint type, const char* path) {
   switch (type) {
   case BOOT:
     if (strcmp(path, Arguments::get_sysclasspath()) != 0) {
-      return fail("[BOOT classpath mismatch, actual: -Dsun.boot.class.path=", Arguments::get_sysclasspath());
+      if(!EagerAppCDS || !CDSIgnoreBootClasspathDiff) {
+        return fail("[BOOT classpath mismatch, actual: -Dsun.boot.class.path=", Arguments::get_sysclasspath());
+      } else {
+        warning("The Boot classpath is different from the one used in profiling.");
+        return true;
+      }
     }
     break;
   case NON_EXIST: // fall-through

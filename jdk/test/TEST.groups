@@ -162,6 +162,7 @@ jdk_security3 = \
     sun/security \
     -sun/security/krb5 \
     -sun/security/jgss \
+    -sun/security/lib/cacerts \
     javax/net \
     lib/security
 
@@ -177,8 +178,11 @@ jdk_security = \
     :jdk_security3 \
     :jdk_security4
 
+# Tests in this group are manual as they depend on external infra
+# and may fail with external reasons, for instance - change in CA test portal.
 jdk_security_infra = \
-    security/infra/java/security/cert/CertPathValidator/certification
+    security/infra/java/security/cert/CertPathValidator/certification \
+    sun/security/lib/cacerts
 
 jdk_text = \
     java/text \
@@ -685,3 +689,8 @@ compact1_minimal = \
  -:needs_compact3 \
  -:needs_jre \
  -:needs_jdk
+
+
+ # Alibaba Feature Related Tests
+dragonwell_jdk_features = \
+  com/alibaba/

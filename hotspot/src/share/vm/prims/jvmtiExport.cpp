@@ -844,6 +844,7 @@ bool              JvmtiExport::_should_post_field_modification            = fals
 bool              JvmtiExport::_should_post_class_load                    = false;
 bool              JvmtiExport::_should_post_class_prepare                 = false;
 bool              JvmtiExport::_should_post_class_unload                  = false;
+bool              JvmtiExport::_should_post_first_class_load_prepare      = false;
 bool              JvmtiExport::_should_post_thread_life                   = false;
 bool              JvmtiExport::_should_clean_up_heap_objects              = false;
 bool              JvmtiExport::_should_post_native_method_bind            = false;
@@ -1016,6 +1017,34 @@ void JvmtiExport::post_class_unload(Klass* klass) {
   }
 }
 
+void JvmtiExport::post_first_class_load_prepare(JavaThread *thread, Handle object) {
+  if (JvmtiEnv::get_phase() < JVMTI_PHASE_PRIMORDIAL) {
+    return;
+  }
+  HandleMark hm(thread);
+
+  EVT_TRIG_TRACE(JVMTI_EVENT_FIRST_CLASS_LOAD_PREPARE, ("JVMTI [%s] Trg First Class Load Prepare triggered",
+                      JvmtiTrace::safe_get_thread_name(thread)));
+  JvmtiThreadState* state = thread->jvmti_thread_state();
+  if (state == NULL) {
+    return;
+  }
+  JvmtiEnvThreadStateIterator it(state);
+  for (JvmtiEnvThreadState* ets = it.first(); ets != NULL; ets = it.next(ets)) {
+    if (ets->is_enabled(JVMTI_EVENT_FIRST_CLASS_LOAD_PREPARE)) {
+      JvmtiEnv *env = ets->get_env();
+      EVT_TRACE(JVMTI_EVENT_FIRST_CLASS_LOAD_PREPARE, ("[%s] Evt First Class Load Prepare sent",
+                JvmtiTrace::safe_get_thread_name(thread) ));
+      JvmtiThreadEventMark jem(thread);
+      jobject loader_jobject = jem.to_jobject(object());
+      JvmtiJavaThreadEventTransition jet(thread);
+      jvmtiEventFirstClassLoadPrepare callback = env->callbacks()->FirstClassLoadPrepare;
+      if (callback != NULL) {
+        (*callback)(env->jvmti_external(), jem.jni_env(), jem.jni_thread(), loader_jobject);
+      }
+    }
+  }
+}
 
 void JvmtiExport::post_thread_start(JavaThread *thread) {
   assert(thread->thread_state() == _thread_in_vm, "must be in vm state");
@@ -1239,14 +1268,7 @@ void JvmtiExport::post_method_exit(JavaThread *thread, Method* method, frame cur
     }
   }
 
-#ifdef AARCH64
-  // FIXME: this is just a kludge to get JVMTI going.  Compiled
-  // MethodHandle code doesn't call the JVMTI notify routines, so the
-  // stack depth we see here is wrong.
-  state->invalidate_cur_stack_depth();
-#else
   state->decr_cur_stack_depth();
-#endif
 }
 
 
@@ -1754,7 +1776,7 @@ jvmtiCompiledMethodLoadInlineRecord* create_inline_record(nmethod* nm) {
     int stackframe = 0;
     for(ScopeDesc* sd = nm->scope_desc_at(p->real_pc(nm));sd != NULL;sd = sd->sender()) {
       // sd->method() can be NULL for stubs but not for nmethods. To be completely robust, include an assert that we should never see a null sd->method()
-      assert(sd->method() != NULL, "sd->method() cannot be null.");
+      guarantee(sd->method() != NULL, "sd->method() cannot be null.");
       record->pcinfo[scope].methods[stackframe] = sd->method()->jmethod_id();
       record->pcinfo[scope].bcis[stackframe] = sd->bci();
       stackframe++;
@@ -1897,13 +1919,17 @@ void JvmtiExport::post_dynamic_code_generated_while_holding_locks(const char* na
                                                                   address code_begin, address code_end)
 {
   // register the stub with the current dynamic code event collector
-  JvmtiThreadState* state = JvmtiThreadState::state_for(JavaThread::current());
-  // state can only be NULL if the current thread is exiting which
-  // should not happen since we're trying to post an event
-  guarantee(state != NULL, "attempt to register stub via an exiting thread");
-  JvmtiDynamicCodeEventCollector* collector = state->get_dynamic_code_event_collector();
-  guarantee(collector != NULL, "attempt to register stub without event collector");
-  collector->register_stub(name, code_begin, code_end);
+  // Cannot take safepoint here so do not use state_for to get
+  // jvmti thread state.
+  // The collector and/or state might be NULL if JvmtiDynamicCodeEventCollector
+  // has been initialized while JVMTI_EVENT_DYNAMIC_CODE_GENERATED was disabled.
+  JvmtiThreadState* state = JavaThread::current()->jvmti_thread_state();
+  if (state != NULL) {
+    JvmtiDynamicCodeEventCollector *collector = state->get_dynamic_code_event_collector();
+    if (collector != NULL) {
+      collector->register_stub(name, code_begin, code_end);
+    }
+  }
 }
 
 // Collect all the vm internally allocated objects which are visible to java world

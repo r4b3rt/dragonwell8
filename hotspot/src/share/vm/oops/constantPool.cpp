@@ -202,7 +202,10 @@ void ConstantPool::initialize_resolved_references(ClassLoaderData* loader_data,
 
 // CDS support. Create a new resolved_references array.
 void ConstantPool::restore_unshareable_info(TRAPS) {
-
+  assert(is_constantPool(), "ensure C++ vtable is restored");
+  assert(on_stack(), "should always be set for shared constant pools");
+  assert(is_shared(), "should always be set for shared constant pools");
+  assert(_cache != NULL, "constant pool _cache should not be NULL");
   // Only create the new resolved references array and lock if it hasn't been
   // attempted before
   if (resolved_references() != NULL) return;
@@ -214,10 +217,9 @@ void ConstantPool::restore_unshareable_info(TRAPS) {
     // Recreate the object array and add to ClassLoaderData.
     int map_length = resolved_reference_length();
     if (map_length > 0) {
-      objArrayOop stom = oopFactory::new_objArray(SystemDictionary::Object_klass(), map_length, CHECK);
-      Handle refs_handle (THREAD, (oop)stom);  // must handleize.
-
       ClassLoaderData* loader_data = pool_holder()->class_loader_data();
+      objArrayOop stom = oopFactory::new_objArray(SystemDictionary::Object_klass(), map_length, CHECK);
+      Handle refs_handle(THREAD, (oop)stom);  // must handleize.
       set_resolved_references(loader_data->add_handle(refs_handle));
     }
 
@@ -234,6 +236,28 @@ void ConstantPool::remove_unshareable_info() {
     resolved_references() != NULL ? resolved_references()->length() : 0);
   set_resolved_references(NULL);
   set_lock(NULL);
+  ResourceMark rm;
+  _flags |= (_on_stack | _is_shared);
+  for (int index = 1; index < length(); index++) { // Index 0 is unused
+    assert(!tag_at(index).is_unresolved_klass_in_error(), "This must not happen during dump time");
+    if (tag_at(index).is_klass()) {
+      // This class was resolved as a side effect of executing Java code
+      // during dump time. We need to restore it back to an UnresolvedClass,
+      // so that the proper class loading and initialization can happen
+      // at runtime.
+      CPSlot slot = slot_at(index);
+      assert(slot.get_klass()->is_klass(), "Sanity check");
+      Symbol* name = slot.get_klass()->name();
+      // for a resolved slot, slot contains Klass*, for an unresoolved slot
+      // slot contains symbol. Reverting to unsolved need set it back to symbol
+      unresolved_klass_at_put(index, name);
+      assert(!tag_at(index).is_klass(), "Sanity check");
+      assert(unresolved_klass_at(index) == name, "Should be same");
+    }
+  }
+  if (cache() != NULL) {
+    cache()->remove_unshareable_info();
+  }
 }
 
 int ConstantPool::cp_to_object_index(int cp_index) {
@@ -616,13 +640,16 @@ bool ConstantPool::resolve_class_constants(TRAPS) {
   return true;
 }
 
-Symbol* ConstantPool::exception_message(constantPoolHandle this_oop, int which, constantTag tag, oop pending_exception) {
+const char* ConstantPool::exception_message(constantPoolHandle this_oop, int which, constantTag tag, oop pending_exception) {
+  // Note: caller needs ResourceMark
+
   // Dig out the detailed message to reuse if possible
-  Symbol* message = java_lang_Throwable::detail_message(pending_exception);
-  if (message != NULL) {
-    return message;
+  const char* msg = java_lang_Throwable::message_as_utf8(pending_exception);
+  if (msg != NULL) {
+    return msg;
   }
 
+  Symbol* message = NULL;
   // Return specific message for the tag
   switch (tag.value()) {
   case JVM_CONSTANT_UnresolvedClass:
@@ -641,16 +668,16 @@ Symbol* ConstantPool::exception_message(constantPoolHandle this_oop, int which, 
     ShouldNotReachHere();
   }
 
-  return message;
+  return message != NULL ? message->as_C_string() : NULL;
 }
 
 void ConstantPool::throw_resolution_error(constantPoolHandle this_oop, int which, TRAPS) {
-  Symbol* message = NULL;
+  ResourceMark rm(THREAD);
+  const char* message = NULL;
   Symbol* error = SystemDictionary::find_resolution_error(this_oop, which, &message);
   assert(error != NULL && message != NULL, "checking");
   CLEAR_PENDING_EXCEPTION;
-  ResourceMark rm;
-  THROW_MSG(error, message->as_C_string());
+  THROW_MSG(error, message);
 }
 
 // If resolution for Class, MethodHandle or MethodType fails, save the exception
@@ -669,7 +696,9 @@ void ConstantPool::save_and_throw_exception(constantPoolHandle this_oop, int whi
     // and OutOfMemoryError, etc, or if the thread was hit by stop()
     // Needs clarification to section 5.4.3 of the VM spec (see 6308271)
   } else if (this_oop->tag_at(which).value() != error_tag) {
-    Symbol* message = exception_message(this_oop, which, tag, PENDING_EXCEPTION);
+    ResourceMark rm(THREAD);
+
+    const char* message = exception_message(this_oop, which, tag, PENDING_EXCEPTION);
     SystemDictionary::add_resolution_error(this_oop, which, error, message);
     this_oop->tag_at_put(which, error_tag);
   } else {
@@ -1879,21 +1908,17 @@ int ConstantPool::copy_cpool_bytes(int cpool_size,
 
 void ConstantPool::set_on_stack(const bool value) {
   if (value) {
-    int old_flags = *const_cast<volatile int *>(&_flags);
-    while ((old_flags & _on_stack) == 0) {
-      int new_flags = old_flags | _on_stack;
-      int result = Atomic::cmpxchg(new_flags, &_flags, old_flags);
-
-      if (result == old_flags) {
-        // Succeeded.
-        MetadataOnStackMark::record(this, Thread::current());
-        return;
-      }
-      old_flags = result;
+    // Only record if it's not already set.
+    if (!on_stack()) {
+      assert(!is_shared(), "should always be set for shared constant pools");
+      _flags |= _on_stack;
+      MetadataOnStackMark::record(this, Thread::current());
     }
   } else {
     // Clearing is done single-threadedly.
-    _flags &= ~_on_stack;
+    if (!is_shared()) {
+      _flags &= ~_on_stack;
+    }
   }
 }
 

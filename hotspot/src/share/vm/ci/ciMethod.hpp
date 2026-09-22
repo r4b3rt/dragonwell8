@@ -38,6 +38,9 @@ class MethodLiveness;
 class BitMap;
 class Arena;
 class BCEscapeAnalyzer;
+#if INCLUDE_AIEXT
+class AccelCallEntry;
+#endif // INCLUDE_AIEXT
 
 
 // ciMethod
@@ -72,6 +75,11 @@ class ciMethod : public ciMetadata {
   int _interpreter_throwout_count;
   int _instructions_size;
   int _size_of_parameters;
+
+#if INCLUDE_AIEXT
+  // Native acceleration.
+  const AccelCallEntry* _accel_call_entry;
+#endif // INCLUDE_AIEXT
 
   bool _uses_monitors;
   bool _balanced_monitors;
@@ -133,15 +141,19 @@ class ciMethod : public ciMetadata {
     check_is_loaded();
     return _signature->size() + (_flags.is_static() ? 0 : 1);
   }
-  // Report the number of elements on stack when invoking this method.
-  // This is different than the regular arg_size because invokedynamic
-  // has an implicit receiver.
+  // Report the number of elements on stack when invoking the current method.
+  // If the method is loaded, arg_size() gives precise information about the
+  // number of stack elements (using the method's signature and its flags).
+  // However, if the method is not loaded, the number of stack elements must
+  // be determined differently, as the method's flags are not yet available.
+  // The invoke_arg_size() method assumes in that case that all bytecodes except
+  // invokestatic and invokedynamic have a receiver that is also pushed onto the
+  // stack by the caller of the current method.
   int invoke_arg_size(Bytecodes::Code code) const {
     if (is_loaded()) {
       return arg_size();
     } else {
       int arg_size = _signature->size();
-      // Add a receiver argument, maybe:
       if (code != Bytecodes::_invokestatic &&
           code != Bytecodes::_invokedynamic) {
         arg_size++;
@@ -167,6 +179,11 @@ class ciMethod : public ciMetadata {
   int interpreter_invocation_count() const       { check_is_loaded(); return _interpreter_invocation_count; }
   int interpreter_throwout_count() const         { check_is_loaded(); return _interpreter_throwout_count; }
   int size_of_parameters() const                 { check_is_loaded(); return _size_of_parameters; }
+
+#if INCLUDE_AIEXT
+  // Native acceleration.
+  const AccelCallEntry* accel_call_entry() const { check_is_loaded(); return _accel_call_entry; }
+#endif // INCLUDE_AIEXT
 
   // Code size for inlining decisions.
   int code_size_for_inlining();

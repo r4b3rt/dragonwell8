@@ -87,8 +87,7 @@ bool Exceptions::special_exception(Thread* thread, const char* file, int line, H
 #endif // ASSERT
 
   if (thread->is_VM_thread()
-      || thread->is_Compiler_thread()
-      || DumpSharedSpaces ) {
+      || thread->is_Compiler_thread()) {
     // We do not care what kind of exception we get for the vm-thread or a thread which
     // is compiling.  We just install a dummy exception object
     //
@@ -114,8 +113,7 @@ bool Exceptions::special_exception(Thread* thread, const char* file, int line, S
   }
 
   if (thread->is_VM_thread()
-      || thread->is_Compiler_thread()
-      || DumpSharedSpaces ) {
+      || thread->is_Compiler_thread()) {
     // We do not care what kind of exception we get for the vm-thread or a thread which
     // is compiling.  We just install a dummy exception object
     //
@@ -142,10 +140,11 @@ void Exceptions::_throw(Thread* thread, const char* file, int line, Handle h_exc
   // tracing (do this up front - so it works during boot strapping)
   if (TraceExceptions) {
     ttyLocker ttyl;
-    tty->print_cr("Exception <%s%s%s> (" INTPTR_FORMAT ") \n"
+    tty->print_cr("Exception <%.*s%s%.*s> (" INTPTR_FORMAT ") \n"
                   "thrown [%s, line %d]\nfor thread " INTPTR_FORMAT,
-                  h_exception->print_value_string(),
-                  message ? ": " : "", message ? message : "",
+                  MAX_LEN, h_exception->print_value_string(),
+                  message ? ": " : "",
+                  MAX_LEN, message ? message : "",
                   (address)h_exception(), file, line, thread);
   }
   // for AbortVMOnException flag

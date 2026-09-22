@@ -27,7 +27,8 @@
 #ifndef CPU_AARCH64_VM_MACROASSEMBLER_AARCH64_HPP
 #define CPU_AARCH64_VM_MACROASSEMBLER_AARCH64_HPP
 
-#include "asm/assembler.hpp"
+#include "asm/assembler.inline.hpp"
+#include "utilities/globalDefinitions.hpp"
 
 // MacroAssembler extends Assembler by frequently used macros.
 //
@@ -135,6 +136,20 @@ class MacroAssembler: public Assembler {
     InstructionMark im(this);
     code_section()->relocate(inst_mark(), a.rspec());
     a.lea(this, r);
+  }
+
+  /* Sometimes we get misaligned loads and stores, usually from Unsafe
+     accesses, and these can exceed the offset range. */
+  Address legitimize_address(const Address &a, int size, Register scratch) {
+    if (a.getMode() == Address::base_plus_offset) {
+      if (! Address::offset_ok_for_immed(a.offset(), exact_log2(size))) {
+        block_comment("legitimize_address {");
+        lea(scratch, a);
+        block_comment("} legitimize_address");
+        return Address(scratch);
+      }
+    }
+    return a;
   }
 
   void addmw(Address a, Register incr, Register scratch) {
@@ -605,6 +620,9 @@ public:
 
   // Support for sign-extension (hi:lo = extend_sign(lo))
   void extend_sign(Register hi, Register lo);
+
+  // Clean up a subword typed value to the representation in compliance with JVMS §2.3
+  void narrow_subword_type(Register reg, BasicType bt);
 
   // Load and store values by size and signed-ness
   void load_sized_value(Register dst, Address src, size_t size_in_bytes, bool is_signed, Register dst2 = noreg);
